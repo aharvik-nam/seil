@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import { Map as MapLibre, Marker, Source, Layer } from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -119,7 +119,7 @@ const ROUTE_COORDS: [number, number][] = [
   [10.633, 59.675],
 ]
 
-const OWN_VESSEL = { lon: 10.590, lat: 59.875, hdg: 34 }
+const OWN_VESSEL = { lon: 10.73358849174145, lat: 59.89893013655055, hdg: 0 }
 
 const ROUTE_GEOJSON = {
   type: 'FeatureCollection' as const,
@@ -138,7 +138,44 @@ function OwnVesselMarker({ hdg }: { hdg: number }): ReactElement {
   )
 }
 
-function SeilMap({ route = false }: { route?: boolean }): ReactElement {
+function projectPos(lat: number, lon: number, cogDeg: number, sog: number, minutes: number): [number, number] {
+  const t = minutes / 60
+  const r = cogDeg * Math.PI / 180
+  return [lon + sog * t * Math.sin(r) / (60 * Math.cos(lat * Math.PI / 180)), lat + sog * t * Math.cos(r) / 60]
+}
+
+function AisMarker({ vessel, onClick }: { vessel: AisVessel; onClick?: () => void }): ReactElement {
+  const isRisk = vessel.cpa < 0.5 && vessel.tcpa > 0 && vessel.tcpa < 20
+  const col = isRisk ? '#ff4d4d' : '#3ad2ff'
+  return (
+    <div onClick={e => { e.stopPropagation(); onClick?.() }} style={{ cursor: 'pointer', padding: 6 }}>
+      <div style={{ transform: `rotate(${vessel.cog}deg)` }}>
+        <svg width="20" height="20" viewBox="0 0 24 24">
+          <path d="M12 4 L17 19 L12 16 L7 19 Z" fill={col} stroke="#060d13" strokeWidth="1.2" strokeLinejoin="round" />
+        </svg>
+      </div>
+    </div>
+  )
+}
+
+function SeilMap({ route = false, vessels = [], own = OWN_VESSEL_DEFAULT, onVesselSelect }: { route?: boolean; vessels?: AisVessel[]; own?: OwnVessel; onVesselSelect?: (v: AisVessel) => void }): ReactElement {
+  const PROJ = 10 // minutes to project ahead
+  const vectorData = {
+    type: 'FeatureCollection' as const,
+    features: [
+      ...(own.sog > 0.3 ? [{
+        type: 'Feature' as const,
+        geometry: { type: 'LineString' as const, coordinates: [[own.lon, own.lat], projectPos(own.lat, own.lon, own.cog, own.sog, PROJ)] },
+        properties: { kind: 'own' }
+      }] : []),
+      ...vessels.filter(v => v.sog > 0.3).map(v => ({
+        type: 'Feature' as const,
+        geometry: { type: 'LineString' as const, coordinates: [[v.lon, v.lat], projectPos(v.lat, v.lon, v.cog, v.sog, PROJ)] },
+        properties: { kind: v.cpa < 0.5 && v.tcpa > 0 && v.tcpa < 20 ? 'risk' : 'normal' }
+      }))
+    ]
+  }
+
   return (
     <MapLibre
       initialViewState={{ longitude: OWN_VESSEL.lon, latitude: OWN_VESSEL.lat, zoom: 11 }}
@@ -146,6 +183,14 @@ function SeilMap({ route = false }: { route?: boolean }): ReactElement {
       mapStyle={MAP_STYLE}
       attributionControl={false}
     >
+      <Source id="vectors" type="geojson" data={vectorData}>
+        <Layer id="vec-normal" type="line" filter={['==', ['get', 'kind'], 'normal']}
+          paint={{ 'line-color': '#3ad2ff', 'line-width': 1.5, 'line-opacity': 0.65, 'line-dasharray': [2, 4] }} />
+        <Layer id="vec-risk" type="line" filter={['==', ['get', 'kind'], 'risk']}
+          paint={{ 'line-color': '#ff4d4d', 'line-width': 2.5, 'line-opacity': 0.95, 'line-dasharray': [2, 3] }} />
+        <Layer id="vec-own" type="line" filter={['==', ['get', 'kind'], 'own']}
+          paint={{ 'line-color': '#ff7a1a', 'line-width': 2, 'line-opacity': 0.85, 'line-dasharray': [3, 5] }} />
+      </Source>
       {route && (
         <Source id="route" type="geojson" data={ROUTE_GEOJSON}>
           <Layer id="route-line" type="line" paint={{ 'line-color': '#ff7a1a', 'line-width': 2.5, 'line-dasharray': [1, 4] }} />
@@ -165,19 +210,253 @@ function SeilMap({ route = false }: { route?: boolean }): ReactElement {
           </div>
         </Marker>
       ))}
-      <Marker longitude={OWN_VESSEL.lon} latitude={OWN_VESSEL.lat} anchor="center">
-        <OwnVesselMarker hdg={OWN_VESSEL.hdg} />
+      {vessels.map(v => (
+        <Marker key={v.mmsi} longitude={v.lon} latitude={v.lat} anchor="center">
+          <AisMarker vessel={v} onClick={() => onVesselSelect?.(v)} />
+        </Marker>
+      ))}
+      <Marker longitude={own.lon} latitude={own.lat} anchor="center">
+        <OwnVesselMarker hdg={own.cog || own.hdg} />
       </Marker>
     </MapLibre>
   )
 }
 
-// ─── Screen 1: Chart ──────────────────────────────────────────
-function ChartScreen({ night, onTab, onNightToggle }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void }) {
+// ─── Live data types ──────────────────────────────────────────
+interface AisVessel {
+  mmsi: number; name: string; lon: number; lat: number
+  sog: number; cog: number; hdg: number; type: number
+  status: number; cls: string; length: number
+  callsign: string; destination: string
+  dist: number; brg: number; cpa: number; tcpa: number
+}
+interface WindData { tws: number; twd: number; temp: number }
+
+// ─── Utils ────────────────────────────────────────────────────
+function distNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2
+  return 3440.065 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+function bearingTo(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180)
+  const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon)
+  return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360
+}
+function computeCpa(olat: number, olon: number, osog: number, ocog: number, vlat: number, vlon: number, vsog: number, vcog: number): { cpa: number; tcpa: number } {
+  const r = Math.PI / 180
+  const dx = (vlon - olon) * Math.cos(olat * r) * 60, dy = (vlat - olat) * 60
+  const ovx = osog * Math.sin(ocog * r) / 60, ovy = osog * Math.cos(ocog * r) / 60
+  const vvx = vsog * Math.sin(vcog * r) / 60, vvy = vsog * Math.cos(vcog * r) / 60
+  const rx = vvx - ovx, ry = vvy - ovy, rv2 = rx * rx + ry * ry
+  const cur = Math.sqrt(dx * dx + dy * dy)
+  if (rv2 < 0.00001) return { cpa: cur, tcpa: 9999 }
+  const t = -(dx * rx + dy * ry) / rv2
+  if (t < 0) return { cpa: cur, tcpa: 0 }
+  return { cpa: Math.sqrt((dx + rx * t) ** 2 + (dy + ry * t) ** 2), tcpa: t }
+}
+function shipTypeLabel(t: number): string {
+  if (t >= 60 && t < 70) return 'Passasjerskip'
+  if (t >= 70 && t < 80) return 'Lasteskip'
+  if (t >= 80 && t < 90) return 'Tanker'
+  if (t === 36 || t === 37) return 'Seilbåt'
+  if (t >= 30 && t < 37) return 'Fiskefartøy'
+  if (t >= 50 && t < 60) return 'Servicefartøy'
+  if (t >= 20 && t < 30) return 'Fritidsbåt'
+  return 'Fartøy'
+}
+
+// ─── Hooks ────────────────────────────────────────────────────
+interface OwnVessel { lon: number; lat: number; hdg: number; sog: number; cog: number; gps: boolean }
+const OWN_VESSEL_DEFAULT: OwnVessel = { lon: 10.73358849174145, lat: 59.89893013655055, hdg: 0, sog: 0, cog: 0, gps: false }
+
+function useOwnVessel(): OwnVessel {
+  const [v, setV] = useState<OwnVessel>(OWN_VESSEL_DEFAULT)
+  const hist = useRef<{ lon: number; lat: number; t: number }[]>([])
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    const id = navigator.geolocation.watchPosition(p => {
+      const lon = p.coords.longitude, lat = p.coords.latitude, now = Date.now()
+      hist.current.push({ lon, lat, t: now })
+      if (hist.current.length > 6) hist.current.shift()
+      let sog = 0, cog = 0
+      if (hist.current.length >= 2) {
+        const prev = hist.current[hist.current.length - 2]
+        const dt = (now - prev.t) / 3_600_000
+        const moved = distNm(prev.lat, prev.lon, lat, lon)
+        if (dt > 0.0005 && moved > 0.005) { sog = moved / dt; cog = bearingTo(prev.lat, prev.lon, lat, lon) }
+      }
+      setV({ lon, lat, hdg: p.coords.heading ?? cog, sog, cog, gps: true })
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 })
+    return () => navigator.geolocation.clearWatch(id)
+  }, [])
+  return v
+}
+
+function useAis(own: OwnVessel) {
+  const ownRef = useRef(own)
+  ownRef.current = own
+  const posHist = useRef<Map<number, { lon: number; lat: number; t: number }[]>>(new Map())
+  const [vessels, setVessels] = useState<AisVessel[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [updated, setUpdated] = useState<Date | null>(null)
+
+  useEffect(() => {
+    async function load() {
+      const o = ownRef.current
+      const now = Date.now()
+      try {
+        const r = await fetch('https://kystdatahuset.no/ws/api/ais/realtime/geojson')
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const d = await r.json()
+        const parsed: AisVessel[] = (d.features as any[]).flatMap((f: any) => {
+          try {
+            const raw = f.geometry?.coordinates
+            if (!raw?.length) return []
+            let lon: number, lat: number
+            if (Array.isArray(raw[0])) {
+              const last = raw[raw.length - 1]
+              if (!last) return []
+              ;[lon, lat] = last
+            } else {
+              ;[lon, lat] = raw
+            }
+            if (typeof lon !== 'number' || typeof lat !== 'number') return []
+            const p = f.properties
+            const mmsi: number = p.mmsi
+
+            // Track position history and derive COG/SOG
+            const hist = posHist.current.get(mmsi) ?? []
+            hist.push({ lon, lat, t: now })
+            if (hist.length > 8) hist.shift()
+            posHist.current.set(mmsi, hist)
+            let sog = p.speed ?? 0, cog = p.cog ?? 0
+            if (hist.length >= 2) {
+              const prev = hist[hist.length - 2]
+              const dt = (now - prev.t) / 3_600_000
+              const moved = distNm(prev.lat, prev.lon, lat, lon)
+              if (dt > 0.005 && moved > 0.02) { sog = moved / dt; cog = bearingTo(prev.lat, prev.lon, lat, lon) }
+            }
+
+            const dist = distNm(o.lat, o.lon, lat, lon)
+            const brg = bearingTo(o.lat, o.lon, lat, lon)
+            const { cpa, tcpa } = computeCpa(o.lat, o.lon, o.sog, o.cog, lat, lon, sog, cog)
+            return [{ mmsi, name: (p.ship_name ?? 'Ukjent').trim() || 'Ukjent', lon, lat, sog, cog, hdg: p.true_heading ?? cog, type: p.ship_type ?? 0, status: p.status ?? 0, cls: p.ais_class ?? 'B', length: p.length ?? 0, callsign: (p.callsign ?? '').trim(), destination: (p.destination ?? '').trim(), dist, brg, cpa, tcpa }]
+          } catch { return [] }
+        }).filter(v => v.dist < 20).sort((a, b) => a.dist - b.dist).slice(0, 30)
+        setVessels(parsed); setUpdated(new Date()); setError(null)
+      } catch (e) { console.error('AIS fetch failed:', e); setError('Kunne ikke laste AIS') }
+      finally { setLoading(false) }
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  return { vessels, loading, error, updated }
+}
+
+function useWind(own: OwnVessel) {
+  const [wind, setWind] = useState<WindData | null>(null)
+  useEffect(() => {
+    async function load() {
+      try {
+        const r = await fetch(
+          `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${own.lat.toFixed(4)}&lon=${own.lon.toFixed(4)}`,
+          { headers: { 'User-Agent': 'SeilApp/0.1 github.com/aharvik-nam/seil' } }
+        )
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const d = await r.json()
+        const det = d.properties?.timeseries?.[0]?.data?.instant?.details
+        if (det) setWind({ tws: +(det.wind_speed * 1.944).toFixed(1), twd: Math.round(det.wind_from_direction), temp: +det.air_temperature.toFixed(1) })
+      } catch { /* silent */ }
+    }
+    load()
+    const id = setInterval(load, 600_000)
+    return () => clearInterval(id)
+  }, [])
+  return wind
+}
+
+// ─── Vessel info sheet ────────────────────────────────────────
+const NAV_STATUS: Record<number, string> = {
+  0: 'Under motor', 1: 'For anker', 2: 'Ikke manøverdyktig', 3: 'Begrenset manøvreevne',
+  5: 'Fortøyd', 6: 'På grunn', 7: 'Engasjert i fiske', 15: 'Udefinert'
+}
+
+function VesselSheet({ vessel, onClose }: { vessel: AisVessel; onClose: () => void }): ReactElement {
+  const isRisk = vessel.cpa < 0.5 && vessel.tcpa > 0 && vessel.tcpa < 20
+  const isWarn = !isRisk && vessel.cpa < 1 && vessel.tcpa > 0 && vessel.tcpa < 30
+  const cpaColor = isRisk ? 'var(--danger)' : isWarn ? 'var(--warn)' : 'var(--go)'
+  const tcpaStr = vessel.tcpa >= 9000 ? '–' : vessel.tcpa < 1 ? '<1 min' : `${Math.round(vessel.tcpa)} min`
+  const statusStr = NAV_STATUS[vessel.status] ?? `Status ${vessel.status}`
+  const Row = ({ label, value, color }: { label: string; value: string; color?: string }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid var(--hairline)' }}>
+      <span className="sectlabel" style={{ fontSize: 11 }}>{label}</span>
+      <span className="disp tnum" style={{ fontSize: 15, fontWeight: 600, color: color ?? 'var(--text)' }}>{value}</span>
+    </div>
+  )
   return (
-    <div className={'scr' + (night ? ' seil-night' : '')}>
+    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 40 }}
+      onClick={e => e.stopPropagation()}>
+      <div style={{ background: 'var(--panel)', borderTop: '1px solid var(--hairline-strong)',
+        borderTopLeftRadius: 22, borderTopRightRadius: 22, boxShadow: '0 -16px 48px rgba(0,0,0,0.55)' }}>
+        {/* Handle + close */}
+        <div style={{ display: 'flex', alignItems: 'center', padding: '12px 18px 0' }}>
+          <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--hairline-strong)', marginRight: 12, cursor: 'pointer' }} onClick={onClose} />
+          <div onClick={onClose} style={{ width: 28, height: 28, borderRadius: 14, background: 'var(--panel-3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-dim)', flexShrink: 0 }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M2 2l10 10M12 2L2 12"/>
+            </svg>
+          </div>
+        </div>
+        {/* Name + type */}
+        <div style={{ padding: '10px 20px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+            <span style={{ fontSize: 22, fontWeight: 700, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+            {isRisk && <span style={{ fontSize: 9.5, fontWeight: 800, color: 'var(--danger)', border: '1px solid var(--danger)', borderRadius: 4, padding: '2px 6px', flexShrink: 0 }}>KOLLISJON</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ais)', background: 'var(--ais-soft)', borderRadius: 6, padding: '2px 8px' }}>{shipTypeLabel(vessel.type)}</span>
+            <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>AIS-{vessel.cls}</span>
+            {vessel.length > 0 && <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{vessel.length} m</span>}
+          </div>
+        </div>
+        {/* Data rows */}
+        <div style={{ padding: '0 20px 6px' }}>
+          <Row label="MMSI" value={String(vessel.mmsi)} />
+          {vessel.callsign && <Row label="Kallesignal" value={vessel.callsign} />}
+          <Row label="Fart · SOG" value={`${vessel.sog.toFixed(1)} kn`} />
+          <Row label="Kurs · COG" value={`${Math.round(vessel.cog)}°`} />
+          <Row label="Avstand" value={`${vessel.dist.toFixed(2)} nm`} />
+          <Row label="Peiling" value={`${Math.round(vessel.brg)}°`} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid var(--hairline)' }}>
+            <span className="sectlabel" style={{ fontSize: 11 }}>CPA · TCPA</span>
+            <span className="disp tnum" style={{ fontSize: 15, fontWeight: 700, color: cpaColor }}>
+              {vessel.cpa.toFixed(2)} nm · {tcpaStr}
+            </span>
+          </div>
+          <Row label="Navigasjonsstatus" value={statusStr} color="var(--text-dim)" />
+          {vessel.destination && <Row label="Destinasjon" value={vessel.destination} />}
+        </div>
+        {/* Safe padding for home indicator */}
+        <div style={{ height: 16 }} />
+      </div>
+    </div>
+  )
+}
+
+// ─── Screen 1: Chart ──────────────────────────────────────────
+function ChartScreen({ night, onTab, onNightToggle, vessels, own }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void; vessels?: AisVessel[]; own?: OwnVessel }) {
+  const [selected, setSelected] = useState<AisVessel | null>(null)
+  return (
+    <div className={'scr' + (night ? ' seil-night' : '')} onClick={() => setSelected(null)}>
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <SeilMap />
+        <SeilMap vessels={vessels} own={own} onVesselSelect={v => { setSelected(v); }} />
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 120,
           background: 'linear-gradient(to bottom, var(--scrim), transparent)', zIndex: 10 }} />
         <StatusBar over time={night ? '02:14' : '13:42'} />
@@ -251,6 +530,7 @@ function ChartScreen({ night, onTab, onNightToggle }: { night: boolean; onTab: (
             </React.Fragment>
           ))}
         </div>
+        {selected && <VesselSheet vessel={selected} onClose={() => setSelected(null)} />}
       </div>
       <TabNav active="chart" onTab={onTab} />
       <div className="home-ind" />
@@ -327,7 +607,7 @@ function DepthSpark() {
   )
 }
 
-function InstrumentScreen({ onTab }: { onTab: (s: Screen) => void }) {
+function InstrumentScreen({ onTab, wind }: { onTab: (s: Screen) => void; wind?: WindData | null }) {
   const Tile = ({ children, style, pad = 16 }: { children: React.ReactNode; style?: CSSProperties; pad?: number }) => (
     <div style={{ background:'var(--panel)', border:'1px solid var(--hairline)', borderRadius:'var(--r-lg)', padding:pad, position:'relative', ...style }}>{children}</div>
   )
@@ -369,7 +649,7 @@ function InstrumentScreen({ onTab }: { onTab: (s: Screen) => void }) {
           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <div style={{ flex:'0 0 52%' }}><WindDial /></div>
             <div style={{ flex:1, display:'flex', flexDirection:'column', gap:12 }}>
-              {([['AWS','14.6','kn'],['TWS','12.1','kn'],['TWA','38°','stb'],['TWD','215°','']] as [string,string,string][]).map(([l,v,u]) => (
+              {([['TWS', wind ? String(wind.tws) : '–', 'kn'], ['TWD', wind ? String(wind.twd)+'°' : '–', ''], ['Temp', wind ? String(wind.temp)+'°' : '–', 'C']] as [string,string,string][]).map(([l,v,u]) => (
                 <div key={l} style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
                   <span className="sectlabel" style={{ fontSize:11 }}>{l}</span>
                   <span><span className="disp" style={{ fontSize:22, fontWeight:700 }}>{v}</span>
@@ -579,16 +859,14 @@ function WeatherScreen({ onTab }: { onTab: (s: Screen) => void }) {
 }
 
 // ─── Screen 5: AIS ────────────────────────────────────────────
-const VESSELS = [
-  { name:'Color Hybrid', type:'Passasjerferge · NOR', mmsi:'257234000', dist:'1,2', brg:'047°', sog:'14.2', cpa:'0,3', tcpa:'4 min', risk:true },
-  { name:'Sjøblomst', type:'Seilbåt', mmsi:'257901230', dist:'0,4', brg:'305°', sog:'5.1', cpa:'0,9', tcpa:'21 min', near:true },
-  { name:'Nordic Star', type:'Lasteskip · NOR', mmsi:'259187000', dist:'2,6', brg:'118°', sog:'11.4', cpa:'1,1', tcpa:'17 min' },
-  { name:'Drøbak I', type:'Rutebåt', mmsi:'257660010', dist:'1,9', brg:'088°', sog:'9.6', cpa:'1,5', tcpa:'12 min' },
-  { name:'Havørn II', type:'Fiskefartøy', mmsi:'257445120', dist:'3,1', brg:'201°', sog:'3.8', cpa:'2,4', tcpa:'31 min' },
-  { name:'Frøya', type:'Fritidsbåt · ankret', mmsi:'257120880', dist:'0,8', brg:'342°', sog:'0.0', cpa:'—', tcpa:'Ankret', anchored:true },
-] as const
-
-function AisScreen({ onTab }: { onTab: (s: Screen) => void }) {
+function AisScreen({ onTab, vessels, loading, error, updated }: {
+  onTab: (s: Screen) => void
+  vessels: AisVessel[]
+  loading: boolean
+  error: string | null
+  updated: Date | null
+}) {
+  const riskCount = vessels.filter(v => v.cpa < 0.5 && v.tcpa < 20).length
   return (
     <div className="scr">
       <StatusBar />
@@ -596,10 +874,19 @@ function AisScreen({ onTab }: { onTab: (s: Screen) => void }) {
         <div style={{ flex:1, minWidth:0 }}>
           <h1 style={{ margin:0, fontSize:24, fontWeight:700, letterSpacing:-0.4, whiteSpace:'nowrap' }}>Fartøy i nærheten</h1>
           <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:6 }}>
-            <span style={{ fontSize:13, color:'var(--ais)', fontWeight:600, display:'flex', alignItems:'center', gap:5 }}>
-              <span style={{ width:7, height:7, borderRadius:4, background:'var(--ais)', display:'inline-block' }} /> 14 mål
-            </span>
-            <span style={{ fontSize:13, color:'var(--text-faint)' }}>· innen 6 nm</span>
+            {loading
+              ? <span style={{ fontSize:13, color:'var(--text-faint)' }}>Laster AIS…</span>
+              : error
+                ? <span style={{ fontSize:13, color:'var(--danger)' }}>{error}</span>
+                : <>
+                    <span style={{ fontSize:13, color:'var(--ais)', fontWeight:600, display:'flex', alignItems:'center', gap:5 }}>
+                      <span style={{ width:7, height:7, borderRadius:4, background:'var(--ais)', display:'inline-block' }} /> {vessels.length} mål
+                    </span>
+                    <span style={{ fontSize:13, color:'var(--text-faint)' }}>· innen 20 nm</span>
+                    {updated && <span style={{ fontSize:11, color:'var(--text-faint)' }}>· {updated.getHours()}:{String(updated.getMinutes()).padStart(2,'0')}</span>}
+                  </>
+            }
+            {riskCount > 0 && <span style={{ fontSize:11, fontWeight:800, color:'var(--danger)', border:'1px solid var(--danger)', borderRadius:4, padding:'1px 5px' }}>{riskCount} FARE</span>}
           </div>
         </div>
         <div className="fab" style={{ width:40, height:40, borderRadius:12, background:'var(--panel)', flexShrink:0 }}>
@@ -618,16 +905,16 @@ function AisScreen({ onTab }: { onTab: (s: Screen) => void }) {
         ))}
       </div>
       <div style={{ flex:1, minHeight:0, overflowY:'auto', borderTop:'1px solid var(--hairline)' }}>
-        {VESSELS.map((v,i) => {
-          const isRisk = 'risk' in v && v.risk
-          const isNear = 'near' in v && v.near
-          const isAnchored = 'anchored' in v && v.anchored
+        {vessels.map(v => {
+          const isRisk = v.cpa < 0.5 && v.tcpa < 20
+          const isNear = !isRisk && v.cpa < 1 && v.tcpa < 30
+          const isAnchored = v.sog < 0.3
           const cpaCol = isRisk?'var(--danger)':isNear?'var(--warn)':'var(--text-dim)'
           const col = isRisk?'var(--danger)':isAnchored?'var(--text-faint)':'var(--ais)'
           const bg = isRisk?'rgba(255,77,77,0.14)':isAnchored?'rgba(150,178,196,0.10)':'var(--ais-soft)'
-          const rot = parseInt(v.brg) || 0
+          const tcpaStr = v.tcpa >= 9000 ? '–' : v.tcpa < 1 ? '<1 min' : `${Math.round(v.tcpa)} min`
           return (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:13, padding:'13px 18px',
+            <div key={v.mmsi} style={{ display:'flex', alignItems:'center', gap:13, padding:'13px 18px',
               background:isRisk?'rgba(255,77,77,0.06)':'transparent',
               borderBottom:'1px solid var(--hairline)',
               boxShadow:isRisk?'inset 3px 0 0 var(--danger)':'none' }}>
@@ -636,7 +923,7 @@ function AisScreen({ onTab }: { onTab: (s: Screen) => void }) {
                 {isAnchored
                   ? <Icon name="anchor" size={22} style={{ color:col }} />
                   : <svg width="24" height="24" viewBox="0 0 24 24">
-                      <g transform={`rotate(${rot} 12 12)`}>
+                      <g transform={`rotate(${v.cog} 12 12)`}>
                         <path d="M12 4 L17 19 L12 16 L7 19 Z" fill={col} />
                       </g>
                     </svg>}
@@ -647,18 +934,18 @@ function AisScreen({ onTab }: { onTab: (s: Screen) => void }) {
                   {isRisk && <span style={{ fontSize:9.5, fontWeight:800, color:'var(--danger)',
                     border:'1px solid var(--danger)', borderRadius:4, padding:'1px 5px', flexShrink:0 }}>FARE</span>}
                 </div>
-                <div className="sectlabel" style={{ fontSize:10.5, marginTop:2, color:'var(--text-dim)', letterSpacing:0.6 }}>{v.type}</div>
+                <div className="sectlabel" style={{ fontSize:10.5, marginTop:2, color:'var(--text-dim)', letterSpacing:0.6 }}>{shipTypeLabel(v.type)} · {v.cls}</div>
                 <div className="mono" style={{ fontSize:10.5, color:'var(--text-faint)', marginTop:3 }}>MMSI {v.mmsi}</div>
               </div>
               <div style={{ textAlign:'right', flexShrink:0 }}>
                 <div style={{ display:'flex', alignItems:'baseline', gap:4, justifyContent:'flex-end' }}>
-                  <span className="disp tnum" style={{ fontSize:19, fontWeight:700 }}>{v.dist}</span>
+                  <span className="disp tnum" style={{ fontSize:19, fontWeight:700 }}>{v.dist.toFixed(1)}</span>
                   <span style={{ fontSize:11, color:'var(--text-dim)' }}>nm</span>
                 </div>
-                <div className="mono tnum" style={{ fontSize:11, color:'var(--text-faint)', marginTop:1 }}>{v.brg} · {v.sog} kn</div>
+                <div className="mono tnum" style={{ fontSize:11, color:'var(--text-faint)', marginTop:1 }}>{Math.round(v.brg)}° · {v.sog.toFixed(1)} kn</div>
                 <div style={{ display:'inline-flex', alignItems:'center', gap:4, marginTop:5, padding:'2px 7px',
                   borderRadius:'var(--r-pill)', background:isRisk?'rgba(255,77,77,0.16)':'var(--panel-2)' }}>
-                  <span className="mono tnum" style={{ fontSize:10.5, fontWeight:600, color:cpaCol }}>CPA {v.cpa} · {v.tcpa}</span>
+                  <span className="mono tnum" style={{ fontSize:10.5, fontWeight:600, color:cpaCol }}>CPA {v.cpa.toFixed(1)} nm · {tcpaStr}</span>
                 </div>
               </div>
             </div>
@@ -774,6 +1061,9 @@ function SettingsScreen({ onTab, night, onNightToggle }: { onTab: (s: Screen) =>
 export default function App() {
   const [screen, setScreen] = useState<Screen>('chart')
   const [night, setNight] = useState(false)
+  const own = useOwnVessel()
+  const { vessels, loading: aisLoading, error: aisError, updated: aisUpdated } = useAis(own)
+  const wind = useWind(own)
 
   const onTab = (s: Screen) => setScreen(s)
   const onNightToggle = () => setNight(n => !n)
@@ -804,11 +1094,11 @@ export default function App() {
         position: 'relative',
         flexShrink: 0,
       }}>
-        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} />}
-        {screen === 'instr'   && <InstrumentScreen onTab={onTab} />}
+        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} />}
+        {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} />}
         {screen === 'route'   && <RouteScreen onTab={onTab} />}
         {screen === 'weather' && <WeatherScreen onTab={onTab} />}
-        {screen === 'ais'     && <AisScreen onTab={onTab} />}
+        {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} />}
         {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} />}
       </div>
     </div>
