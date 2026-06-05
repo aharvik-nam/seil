@@ -1431,8 +1431,8 @@ function TabletSidePanel({
 }) {
   const bg = night ? '#0a0d12' : '#0e1520'
   const L = LABELS[term]
-  const sog = own.speed ?? 0
-  const cog = own.course ?? 0
+  const sog = own.sog ?? 0
+  const cog = own.cog ?? 0
   const tws = wind?.tws ?? 0
   const twd = wind?.twd ?? 0
   const riskVessel = vessels.find(v => v.cpa !== undefined && v.cpa < 0.5)
