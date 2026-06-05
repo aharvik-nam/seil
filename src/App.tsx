@@ -6,6 +6,20 @@ import './seil.css'
 
 // ─── Types ────────────────────────────────────────────────────
 type Screen = 'chart' | 'instr' | 'route' | 'ais' | 'more' | 'weather'
+type Term = 'enkel' | 'nautisk'
+
+const LABELS: Record<Term, Record<string, string>> = {
+  enkel: {
+    speed: 'Fart', course: 'Kurs', depth: 'Dybde',
+    wind: 'Vind', windDir: 'Vindretning', windAngle: 'Vindvinkel',
+    vmg: 'Mot vind', cpa: 'Nærmeste', temp: 'Vanntemp', max: 'Maks', avg: 'Snitt',
+  },
+  nautisk: {
+    speed: 'SOG', course: 'COG', depth: 'Dybde',
+    wind: 'TWS', windDir: 'TWD', windAngle: 'AWA',
+    vmg: 'VMG', cpa: 'CPA', temp: 'Temp', max: 'Maks', avg: 'Snitt',
+  },
+}
 
 // ─── Icon ─────────────────────────────────────────────────────
 const PATHS: Record<string, ReactElement> = {
@@ -460,7 +474,8 @@ function windBeaufort(kn: number): number {
   return scale.findIndex(v => kn <= v) + (kn > 63 ? 12 : 0)
 }
 
-function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void; vessels?: AisVessel[]; own?: OwnVessel; wind?: WindData | null }) {
+function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind, term = 'enkel' }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void; vessels?: AisVessel[]; own?: OwnVessel; wind?: WindData | null; term?: Term }) {
+  const L = LABELS[term]
   const [selected, setSelected] = useState<AisVessel | null>(null)
   return (
     <div className={'scr' + (night ? ' seil-night' : '')} onClick={() => setSelected(null)}>
@@ -549,21 +564,20 @@ function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind }: { nigh
         </div>
 
         <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 20,
-          display: 'flex', alignItems: 'center', gap: 4, padding: '12px 18px 14px',
-          background: 'linear-gradient(to top, var(--bg) 28%, transparent)' }}>
+          display: 'flex', alignItems: 'center', padding: '20px 14px 16px',
+          background: 'linear-gradient(to top, var(--bg) 34%, transparent)' }}>
           {[
-            { lab: 'SOG', val: own?.sog ? own.sog.toFixed(1) : '0.0', unit: 'kn', color: 'var(--accent)' },
-            { lab: 'COG', val: own?.cog ? String(Math.round(own.cog)).padStart(3,'0') : '000', unit: '°', color: '' },
-            { lab: 'Dybde', val: '18.4', unit: 'm', color: '' },
-            { lab: 'TWS', val: wind ? String(wind.tws) : '–', unit: 'kn', color: '' },
+            { lab: L.speed, val: own?.sog ? own.sog.toFixed(1) : '0.0', unit: 'kn', color: 'var(--accent)' },
+            { lab: L.depth, val: '18.4', unit: 'm', color: '' },
+            { lab: L.wind,  val: wind ? String(wind.tws) : '–', unit: 'kn', color: '' },
           ].map(({ lab, val, unit, color }, i) => (
             <React.Fragment key={lab}>
-              {i > 0 && <div style={{ width: 1, height: 30, background: 'var(--hairline-strong)' }} />}
-              <div className="dchip" style={{ flex: 1 }}>
-                <span className="lab">{lab}</span>
-                <span style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
-                  <span className="val" style={{ fontSize: 26, color: color || 'var(--text)' }}>{val}</span>
-                  <span className="unit">{unit}</span>
+              {i > 0 && <div style={{ width: 1, height: 44, background: 'var(--hairline-strong)' }} />}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', color: 'var(--text-dim)' }}>{lab}</span>
+                <span style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                  <span className="disp" style={{ fontSize: 50, fontWeight: 700, lineHeight: 0.86, color: color || 'var(--text)' }}>{val}</span>
+                  <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-dim)' }}>{unit}</span>
                 </span>
               </div>
             </React.Fragment>
@@ -646,81 +660,58 @@ function DepthSpark() {
   )
 }
 
-function InstrumentScreen({ onTab, wind }: { onTab: (s: Screen) => void; wind?: WindData | null }) {
+function InstrumentScreen({ onTab, wind, term = 'enkel' }: { onTab: (s: Screen) => void; wind?: WindData | null; term?: Term }) {
+  const L = LABELS[term]
   const Tile = ({ children, style, pad = 16 }: { children: React.ReactNode; style?: CSSProperties; pad?: number }) => (
     <div style={{ background:'var(--panel)', border:'1px solid var(--hairline)', borderRadius:'var(--r-lg)', padding:pad, position:'relative', ...style }}>{children}</div>
   )
-  const Mini = ({ lab, val, unit, color }: { lab:string; val:string; unit:string; color?:string }) => (
-    <div style={{ flex:1, padding:'12px 14px', background:'var(--panel)', border:'1px solid var(--hairline)', borderRadius:'var(--r-md)' }}>
-      <div className="sectlabel" style={{ fontSize:10, marginBottom:6 }}>{lab}</div>
-      <div style={{ display:'flex', alignItems:'baseline', gap:3 }}>
-        <span className="disp" style={{ fontSize:22, fontWeight:700, color:color||'var(--text)' }}>{val}</span>
-        <span style={{ fontSize:11, fontWeight:600, color:'var(--text-dim)' }}>{unit}</span>
+  const BigTile = ({ lab, val, unit, sub, color }: { lab:string; val:string; unit:string; sub?:string; color?:string }) => (
+    <Tile style={{ flex:1, display:'flex', flexDirection:'column' }} pad={16}>
+      <div style={{ fontSize:12, fontWeight:700, letterSpacing:1.2, textTransform:'uppercase', color:color||'var(--text-dim)', marginBottom:8 }}>{lab}</div>
+      <div style={{ display:'flex', alignItems:'baseline', gap:5 }}>
+        <span className="disp" style={{ fontSize:52, fontWeight:700, lineHeight:0.86, color:color||'var(--text)' }}>{val}</span>
+        <span style={{ fontSize:16, fontWeight:600, color:'var(--text-dim)' }}>{unit}</span>
       </div>
-    </div>
+      {sub && <div style={{ fontSize:12.5, color:'var(--text-dim)', fontWeight:600, marginTop:6 }}>{sub}</div>}
+    </Tile>
   )
   return (
     <div className="scr">
       <StatusBar />
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 20px 10px' }}>
-        <h1 style={{ margin:0, fontSize:24, fontWeight:700, letterSpacing:-0.4 }}>Instrumenter</h1>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 20px 12px' }}>
+        <h1 style={{ margin:0, fontSize:26, fontWeight:700, letterSpacing:-0.4 }}>Instrumenter</h1>
         <div className="fab" style={{ width:40, height:40, borderRadius:12, background:'var(--panel)' }}><Icon name="sliders" size={20} /></div>
       </div>
-      <div style={{ flex:1, minHeight:0, padding:'0 16px', display:'flex', flexDirection:'column', gap:10, overflowY:'auto' }}>
-        <Tile style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+      <div style={{ flex:1, minHeight:0, padding:'0 16px', display:'flex', flexDirection:'column', gap:12, overflowY:'auto' }}>
+        {/* Fart hero — størst */}
+        <Tile style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }} pad={18}>
           <div>
-            <div className="sectlabel" style={{ color:'var(--accent)', marginBottom:8 }}>Fart over grunn · SOG</div>
-            <div style={{ display:'flex', alignItems:'baseline', gap:6 }}>
-              <span className="disp" style={{ fontSize:60, fontWeight:700, lineHeight:0.9, color:'var(--accent)' }}>6.2</span>
-              <span style={{ fontSize:18, fontWeight:600, color:'var(--text-dim)' }}>kn</span>
+            <div style={{ fontSize:12, fontWeight:700, letterSpacing:1.2, textTransform:'uppercase', color:'var(--accent)', marginBottom:8 }}>{L.speed}</div>
+            <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
+              <span className="disp" style={{ fontSize:78, fontWeight:700, lineHeight:0.8, color:'var(--accent)' }}>6.2</span>
+              <span style={{ fontSize:22, fontWeight:600, color:'var(--text-dim)' }}>kn</span>
             </div>
           </div>
-          <div style={{ textAlign:'right', display:'flex', flexDirection:'column', gap:10 }}>
-            <div><div className="sectlabel" style={{ fontSize:10 }}>Maks</div><div className="disp tnum" style={{ fontSize:18 }}>8.1</div></div>
-            <div><div className="sectlabel" style={{ fontSize:10 }}>Snitt</div><div className="disp tnum" style={{ fontSize:18 }}>5.4</div></div>
+          <div style={{ textAlign:'right', display:'flex', flexDirection:'column', gap:14 }}>
+            <div><div className="sectlabel" style={{ fontSize:10 }}>{L.max}</div><div className="disp tnum" style={{ fontSize:22 }}>8.1</div></div>
+            <div><div className="sectlabel" style={{ fontSize:10 }}>{L.avg}</div><div className="disp tnum" style={{ fontSize:22 }}>5.4</div></div>
           </div>
         </Tile>
-        <Tile pad={14}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-            <div className="sectlabel" style={{ marginBottom:8 }}>Vind</div>
-            <span className="sectlabel" style={{ fontSize:10, color:'var(--accent)' }}>SANN ⇄ TILSYN.</span>
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <div style={{ flex:'0 0 52%' }}><WindDial /></div>
-            <div style={{ flex:1, display:'flex', flexDirection:'column', gap:12 }}>
-              {([['TWS', wind ? String(wind.tws) : '–', 'kn'], ['TWD', wind ? String(wind.twd)+'°' : '–', ''], ['Temp', wind ? String(wind.temp)+'°' : '–', 'C']] as [string,string,string][]).map(([l,v,u]) => (
-                <div key={l} style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
-                  <span className="sectlabel" style={{ fontSize:11 }}>{l}</span>
-                  <span><span className="disp" style={{ fontSize:22, fontWeight:700 }}>{v}</span>
-                    <span style={{ fontSize:11, color:'var(--text-dim)', marginLeft:3 }}>{u}</span></span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Tile>
-        <div style={{ display:'flex', gap:10 }}>
-          <Tile style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center' }} pad={12}>
-            <div className="sectlabel" style={{ marginBottom:8 }}>Kurs over grunn</div>
+        {/* Dybde + Vind — store tall side om side */}
+        <div style={{ display:'flex', gap:12 }}>
+          <BigTile lab={L.depth} val="18.4" unit="m" sub="Alarm ved 3,0 m" />
+          <BigTile lab={L.wind} val={wind ? String(wind.tws) : '–'} unit="kn" sub={wind ? `fra ${windCardinal(wind.twd)}` : ''} />
+        </div>
+        {/* Grafiske detaljer */}
+        <div style={{ display:'flex', gap:12, flex:1, minHeight:120 }}>
+          <Tile style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }} pad={12}>
+            <div className="sectlabel" style={{ marginBottom:8 }}>{L.course}</div>
             <CompassDial hdg={34} />
           </Tile>
-          <Tile style={{ flex:1, display:'flex', flexDirection:'column' }} pad={14}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div className="sectlabel" style={{ marginBottom:8 }}>Dybde</div>
-              <Icon name="drop" size={15} style={{ color:'var(--text-faint)' }} />
-            </div>
-            <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
-              <span className="disp" style={{ fontSize:40, fontWeight:700, lineHeight:0.9 }}>18.4</span>
-              <span style={{ fontSize:14, color:'var(--text-dim)' }}>m</span>
-            </div>
-            <div style={{ flex:1 }} />
-            <div style={{ margin:'8px 0 6px' }}><DepthSpark /></div>
-            <div style={{ fontSize:11, color:'var(--text-faint)', fontWeight:600 }}>Alarm &lt; 3,0 m · offset 0,8 m</div>
+          <Tile style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center' }} pad={12}>
+            <div className="sectlabel" style={{ marginBottom:8 }}>{L.windAngle}</div>
+            <WindDial />
           </Tile>
-        </div>
-        <div style={{ display:'flex', gap:10 }}>
-          <Mini lab="VMG" val="4.8" unit="kn" color="var(--accent)" />
-          <Mini lab="Vanntemp" val="14.2" unit="°C" />
-          <Mini lab="Tur" val="12.7" unit="nm" />
         </div>
       </div>
       <TabNav active="instr" onTab={onTab} />
@@ -898,34 +889,37 @@ function WeatherScreen({ onTab }: { onTab: (s: Screen) => void }) {
 }
 
 // ─── Screen 5: AIS ────────────────────────────────────────────
-function AisScreen({ onTab, vessels, loading, error, updated }: {
+function AisScreen({ onTab, vessels, loading, error, updated, term = 'enkel' }: {
   onTab: (s: Screen) => void
   vessels: AisVessel[]
   loading: boolean
   error: string | null
   updated: Date | null
+  term?: Term
 }) {
+  const L = LABELS[term]
   const riskCount = vessels.filter(v => v.cpa < 0.5 && v.tcpa < 20).length
+  const sortLabels = term === 'enkel' ? ['Avstand', 'Nærmeste', 'Navn'] : ['Avstand', 'CPA', 'Navn']
   return (
     <div className="scr">
       <StatusBar />
       <div style={{ padding:'4px 18px 12px', display:'flex', alignItems:'center', gap:12 }}>
         <div style={{ flex:1, minWidth:0 }}>
-          <h1 style={{ margin:0, fontSize:24, fontWeight:700, letterSpacing:-0.4, whiteSpace:'nowrap' }}>Fartøy i nærheten</h1>
-          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:6 }}>
+          <h1 style={{ margin:0, fontSize:26, fontWeight:700, letterSpacing:-0.4, whiteSpace:'nowrap' }}>Fartøy i nærheten</h1>
+          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:6, whiteSpace:'nowrap' }}>
             {loading
               ? <span style={{ fontSize:13, color:'var(--text-faint)' }}>Laster AIS…</span>
               : error
                 ? <span style={{ fontSize:13, color:'var(--danger)' }}>{error}</span>
                 : <>
-                    <span style={{ fontSize:13, color:'var(--ais)', fontWeight:600, display:'flex', alignItems:'center', gap:5 }}>
+                    <span style={{ fontSize:13, color:'var(--ais)', fontWeight:600, display:'flex', alignItems:'center', gap:5, flexShrink:0 }}>
                       <span style={{ width:7, height:7, borderRadius:4, background:'var(--ais)', display:'inline-block' }} /> {vessels.length} mål
                     </span>
-                    <span style={{ fontSize:13, color:'var(--text-faint)' }}>· innen 20 nm</span>
+                    <span style={{ fontSize:13, color:'var(--text-faint)', flexShrink:0 }}>· innen 20 nm</span>
                     {updated && <span style={{ fontSize:11, color:'var(--text-faint)' }}>· {updated.getHours()}:{String(updated.getMinutes()).padStart(2,'0')}</span>}
                   </>
             }
-            {riskCount > 0 && <span style={{ fontSize:11, fontWeight:800, color:'var(--danger)', border:'1px solid var(--danger)', borderRadius:4, padding:'1px 5px' }}>{riskCount} FARE</span>}
+            {riskCount > 0 && <span style={{ fontSize:11, fontWeight:800, color:'var(--danger)', border:'1px solid var(--danger)', borderRadius:4, padding:'1px 5px', flexShrink:0 }}>{riskCount} FARE</span>}
           </div>
         </div>
         <div className="fab" style={{ width:40, height:40, borderRadius:12, background:'var(--panel)', flexShrink:0 }}>
@@ -933,7 +927,7 @@ function AisScreen({ onTab, vessels, loading, error, updated }: {
         </div>
       </div>
       <div style={{ display:'flex', gap:8, padding:'0 18px 12px' }}>
-        {['Avstand','CPA','Navn'].map((s,i) => (
+        {sortLabels.map((s,i) => (
           <div key={s} style={{ height:32, padding:'0 14px', borderRadius:'var(--r-pill)',
             display:'flex', alignItems:'center', gap:5, fontSize:13, fontWeight:600,
             background:i===0?'var(--accent-soft)':'var(--panel)',
@@ -952,6 +946,11 @@ function AisScreen({ onTab, vessels, loading, error, updated }: {
           const col = isRisk?'var(--danger)':isAnchored?'var(--text-faint)':'var(--ais)'
           const bg = isRisk?'rgba(255,77,77,0.14)':isAnchored?'rgba(150,178,196,0.10)':'var(--ais-soft)'
           const tcpaStr = v.tcpa >= 9000 ? '–' : v.tcpa < 1 ? '<1 min' : `${Math.round(v.tcpa)} min`
+          const cpaText = isAnchored
+            ? (term === 'enkel' ? 'Ligger i ro' : 'Ankret')
+            : term === 'enkel'
+              ? `Nærmest ${v.cpa.toFixed(1)} nm · ${tcpaStr}`
+              : `${L.cpa} ${v.cpa.toFixed(2)} · ${tcpaStr}`
           return (
             <div key={v.mmsi} style={{ display:'flex', alignItems:'center', gap:13, padding:'13px 18px',
               background:isRisk?'rgba(255,77,77,0.06)':'transparent',
@@ -978,13 +977,13 @@ function AisScreen({ onTab, vessels, loading, error, updated }: {
               </div>
               <div style={{ textAlign:'right', flexShrink:0 }}>
                 <div style={{ display:'flex', alignItems:'baseline', gap:4, justifyContent:'flex-end' }}>
-                  <span className="disp tnum" style={{ fontSize:19, fontWeight:700 }}>{v.dist.toFixed(1)}</span>
+                  <span className="disp tnum" style={{ fontSize:22, fontWeight:700 }}>{v.dist.toFixed(1)}</span>
                   <span style={{ fontSize:11, color:'var(--text-dim)' }}>nm</span>
                 </div>
                 <div className="mono tnum" style={{ fontSize:11, color:'var(--text-faint)', marginTop:1 }}>{Math.round(v.brg)}° · {v.sog.toFixed(1)} kn</div>
-                <div style={{ display:'inline-flex', alignItems:'center', gap:4, marginTop:5, padding:'2px 7px',
+                <div style={{ display:'inline-flex', alignItems:'center', gap:4, marginTop:5, padding:'3px 9px',
                   borderRadius:'var(--r-pill)', background:isRisk?'rgba(255,77,77,0.16)':'var(--panel-2)' }}>
-                  <span className="mono tnum" style={{ fontSize:10.5, fontWeight:600, color:cpaCol }}>CPA {v.cpa.toFixed(1)} nm · {tcpaStr}</span>
+                  <span className="tnum" style={{ fontSize:11.5, fontWeight:600, color:cpaCol, whiteSpace:'nowrap' }}>{cpaText}</span>
                 </div>
               </div>
             </div>
@@ -998,7 +997,7 @@ function AisScreen({ onTab, vessels, loading, error, updated }: {
 }
 
 // ─── Screen 6: Settings ───────────────────────────────────────
-function SettingsScreen({ onTab, night, onNightToggle }: { onTab: (s: Screen) => void; night: boolean; onNightToggle: () => void }) {
+function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm }: { onTab: (s: Screen) => void; night: boolean; onNightToggle: () => void; term?: Term; setTerm?: (t: Term) => void }) {
   const SRow = ({ icon, label, value, chev, toggle, on, last }: {
     icon:string; label:string; value?:string; chev?:boolean; toggle?:boolean; on?:boolean; last?:boolean
   }) => (
@@ -1060,6 +1059,23 @@ function SettingsScreen({ onTab, night, onNightToggle }: { onTab: (s: Screen) =>
             </div>
           ))}
         </div>
+        <Group title="Terminologi">
+          <div style={{ display:'flex', gap:6, padding:8 }}>
+            {([['enkel','Enkel','Fart · Kurs · Vind'],['nautisk','Nautisk','SOG · COG · TWS']] as [Term,string,string][]).map(([val,label,hint]) => {
+              const on = term === val
+              return (
+                <div key={val} onClick={() => setTerm?.(val)} style={{
+                  flex:1, height:56, borderRadius:'var(--r-md)', padding:'0 14px', cursor:'pointer',
+                  display:'flex', flexDirection:'column', justifyContent:'center', gap:2,
+                  background: on ? 'var(--accent-soft)' : 'var(--panel-2)',
+                  border: '1.5px solid ' + (on ? 'var(--accent)' : 'transparent') }}>
+                  <span style={{ fontSize:15, fontWeight:700, color: on ? 'var(--accent)' : 'var(--text)' }}>{label}</span>
+                  <span style={{ fontSize:11.5, color:'var(--text-dim)' }}>{hint}</span>
+                </div>
+              )
+            })}
+          </div>
+        </Group>
         <Group title="Visning">
           <div style={{ display:'flex', gap:6, padding:13 }}>
             {([['moon','Mørk'],['drop','Nattsyn'],['sun','Auto']] as [string,string][]).map(([ic,l],i) => (
@@ -1081,9 +1097,8 @@ function SettingsScreen({ onTab, night, onNightToggle }: { onTab: (s: Screen) =>
           <SRow icon="sun" label="Hold skjerm våken" toggle on last />
         </Group>
         <Group title="Sikkerhet">
-          <SRow icon="drop" label="Dybdealarm" value="3,0 m" chev />
-          <SRow icon="alert" label="Grunnvarsel" toggle on />
-          <SRow icon="ais" label="AIS-fareavstand (CPA)" value="0,5 nm" chev last />
+          <SRow icon="drop" label="Varsle på grunt vann" value="3,0 m" chev />
+          <SRow icon="ais" label={term === 'enkel' ? 'Varsle om nære fartøy' : 'AIS-fareavstand (CPA)'} value="0,5 nm" chev last />
         </Group>
         <Group title="Fartøy · AIS">
           <SRow icon="radio" label="MMSI" value="257 199 040" chev />
@@ -1100,12 +1115,14 @@ function SettingsScreen({ onTab, night, onNightToggle }: { onTab: (s: Screen) =>
 export default function App() {
   const [screen, setScreen] = useState<Screen>('chart')
   const [night, setNight] = useState(false)
+  const [term, setTermState] = useState<Term>(() => (localStorage.getItem('seil.term') as Term) || 'enkel')
   const own = useOwnVessel()
   const { vessels, loading: aisLoading, error: aisError, updated: aisUpdated } = useAis(own)
   const wind = useWind(own)
 
   const onTab = (s: Screen) => setScreen(s)
   const onNightToggle = () => setNight(n => !n)
+  const setTerm = (t: Term) => { setTermState(t); localStorage.setItem('seil.term', t) }
 
   return (
     <div style={{
@@ -1133,12 +1150,12 @@ export default function App() {
         position: 'relative',
         flexShrink: 0,
       }}>
-        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} wind={wind} />}
-        {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} />}
+        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} wind={wind} term={term} />}
+        {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} term={term} />}
         {screen === 'route'   && <RouteScreen onTab={onTab} />}
         {screen === 'weather' && <WeatherScreen onTab={onTab} />}
-        {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} />}
-        {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} />}
+        {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} term={term} />}
+        {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} term={term} setTerm={setTerm} />}
       </div>
     </div>
   )
