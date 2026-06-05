@@ -1,5 +1,7 @@
 import React, { useState } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
+import { Map as MapLibre, Marker, Source, Layer } from 'react-map-gl/maplibre'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import './seil.css'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -90,129 +92,83 @@ function TabNav({ active, onTab }: { active: Screen; onTab: (s: Screen) => void 
   )
 }
 
-// ─── ChartMap ─────────────────────────────────────────────────
-const LAND_A = "M -30 -30 L 168 -30 C 170 48, 104 78, 130 138 C 150 186, 92 214, 44 236 C 14 250, -30 236 -30 236 Z"
-const LAND_B = "M 430 860 L 430 452 C 372 452, 338 506, 306 548 C 274 590, 306 644, 262 686 C 230 716, 252 806, 232 860 Z"
-const ISLE   = "M 286 150 C 312 142, 338 158, 332 178 C 326 198, 300 206, 282 196 C 266 187, 264 158, 286 150 Z"
-const ROUTE_PTS = [
-  { x: 188, y: 486 }, { x: 214, y: 402 }, { x: 244, y: 322 },
-  { x: 212, y: 244 }, { x: 252, y: 168 },
+// ─── Map constants ────────────────────────────────────────────
+const KARTVERKET_URL =
+  'https://cache.kartverket.no/v1/wmts/1.0.0/sjokartraster/default/webmercator/{z}/{y}/{x}.png'
+
+const OPENSEAMAP_URL = 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png'
+
+const MAP_STYLE = {
+  version: 8 as const,
+  sources: {
+    kartverket: { type: 'raster' as const, tiles: [KARTVERKET_URL], tileSize: 256, attribution: '© Kartverket' },
+    openseamap: { type: 'raster' as const, tiles: [OPENSEAMAP_URL], tileSize: 256, attribution: '© OpenSeaMap contributors' },
+  },
+  layers: [
+    { id: 'kartverket', type: 'raster' as const, source: 'kartverket' },
+    { id: 'openseamap', type: 'raster' as const, source: 'openseamap', paint: { 'raster-opacity': 0.9 as number } },
+  ],
+}
+
+// Approximate Oslofjord coords: Solvik brygge → Drøbak
+const ROUTE_COORDS: [number, number][] = [
+  [10.590, 59.875],
+  [10.598, 59.832],
+  [10.618, 59.790],
+  [10.624, 59.748],
+  [10.633, 59.675],
 ]
 
-function WindBarb({ x, y, dir, kn }: { x: number; y: number; dir: number; kn: number }): ReactElement {
-  const col = kn < 8 ? '#5fb8c8' : kn < 16 ? 'var(--go)' : kn < 24 ? 'var(--warn)' : 'var(--danger)'
+const OWN_VESSEL = { lon: 10.590, lat: 59.875, hdg: 34 }
+
+const ROUTE_GEOJSON = {
+  type: 'FeatureCollection' as const,
+  features: [{ type: 'Feature' as const, geometry: { type: 'LineString' as const, coordinates: ROUTE_COORDS }, properties: {} }],
+}
+
+function OwnVesselMarker({ hdg }: { hdg: number }): ReactElement {
   return (
-    <g transform={`translate(${x} ${y}) rotate(${dir})`} opacity="0.92">
-      <line x1="0" y1="-13" x2="0" y2="11" stroke={col} strokeWidth="1.7" strokeLinecap="round" />
-      <path d="M0 11 l -3.4 -5 M0 11 l 3.4 -5" stroke={col} strokeWidth="1.7" fill="none" strokeLinecap="round" />
-      {kn >= 16 && <line x1="0" y1="-13" x2="6" y2="-16" stroke={col} strokeWidth="1.7" strokeLinecap="round" />}
-      {kn >= 8 && <line x1="0" y1="-9" x2="6" y2="-12" stroke={col} strokeWidth="1.7" strokeLinecap="round" />}
-    </g>
+    <div style={{ transform: `rotate(${hdg}deg)`, pointerEvents: 'none' }}>
+      <svg width="44" height="44" viewBox="-22 -22 44 44">
+        <circle r="18" fill="rgba(255,122,26,0.18)" stroke="#ff7a1a" strokeWidth="1" opacity="0.7" />
+        <line x1="0" y1="-18" x2="0" y2="-38" stroke="#ff7a1a" strokeWidth="1.5" strokeDasharray="2 4" opacity="0.7" />
+        <path d="M0 -13 L9 9 L0 4 L-9 9 Z" fill="#ff7a1a" stroke="#0b0500" strokeWidth="1.2" strokeLinejoin="round" />
+      </svg>
+    </div>
   )
 }
 
-function ChartMap({ boat = { x: 196, y: 432, hdg: 34 }, route = false, wind = false, marks = true, grid = true }: {
-  boat?: { x: number; y: number; hdg: number }
-  route?: boolean; wind?: boolean; marks?: boolean; grid?: boolean
-}) {
-  const winds: ReactElement[] = []
-  if (wind) {
-    let i = 0
-    for (let gy = 110; gy <= 700; gy += 96) {
-      for (let gx = 60; gx <= 340; gx += 92) {
-        const jitter = ((gx * 7 + gy * 3) % 18) - 9
-        const kn = 9 + ((gx + gy) % 5) * 3 + (gy > 460 ? 5 : 0)
-        winds.push(<WindBarb key={i++} x={gx + (i % 2 ? 16 : 0)} y={gy} dir={28 + jitter} kn={kn} />)
-      }
-    }
-  }
+function SeilMap({ route = false }: { route?: boolean }): ReactElement {
   return (
-    <svg className="chartmap" viewBox="0 0 390 820" preserveAspectRatio="xMidYMid slice">
-      <defs>
-        <radialGradient id="water" cx="46%" cy="40%" r="80%">
-          <stop offset="0%" stopColor="var(--water-mid)" />
-          <stop offset="100%" stopColor="var(--water-deep)" />
-        </radialGradient>
-      </defs>
-      <rect x="0" y="0" width="390" height="820" fill="url(#water)" />
-      {grid && (
-        <g stroke="var(--hairline)" strokeWidth="1">
-          <line x1="0" y1="250" x2="390" y2="250" /><line x1="0" y1="560" x2="390" y2="560" />
-          <line x1="130" y1="0" x2="130" y2="820" /><line x1="285" y1="0" x2="285" y2="820" />
-        </g>
-      )}
-      <g fill="none" stroke="var(--water-shallow)" strokeWidth="26" strokeLinejoin="round" opacity="0.9">
-        <path d={LAND_A} /><path d={LAND_B} /><path d={ISLE} />
-      </g>
-      <g fill="none" stroke="var(--water-shallow)" strokeWidth="12" strokeLinejoin="round" opacity="0.65">
-        <path d={LAND_A} /><path d={LAND_B} /><path d={ISLE} />
-      </g>
-      <g fill="none" stroke="var(--depth-line)" strokeWidth="1" strokeDasharray="2 5">
-        <path d="M -10 200 C 70 196 92 250 70 300 C 50 344 -4 350 -20 360" />
-        <path d="M 320 470 C 286 506 300 556 256 600 C 224 632 252 690 236 740" />
-        <path d="M 250 150 C 300 130 360 168 348 196" opacity=".7" />
-      </g>
-      <g stroke="var(--land-edge)" strokeWidth="1.4" strokeLinejoin="round">
-        <path d={LAND_A} fill="var(--land)" />
-        <path d={LAND_B} fill="var(--land)" />
-        <path d={ISLE} fill="var(--land-2)" />
-      </g>
-      <g>
-        {[{x:150,y:330,n:'12'},{x:210,y:250,n:'24'},{x:196,y:470,n:'31'},{x:262,y:392,n:'28'},
-          {x:96,y:430,n:'8'},{x:300,y:300,n:'6'},{x:150,y:560,n:'22'},{x:250,y:520,n:'19'},
-          {x:330,y:420,n:'34'},{x:120,y:620,n:'15'}].map(({x,y,n}) => (
-          <text key={`${x}${y}`} x={x} y={y} fill="var(--depth-text)" fontSize="11"
-            fontFamily="IBM Plex Mono" textAnchor="middle" style={{ fontVariantNumeric: 'tabular-nums' }}>{n}</text>
-        ))}
-      </g>
-      {marks && (
-        <g>
-          <g>
-            <line x1="120" y1="300" x2="120" y2="286" stroke="var(--stbd)" strokeWidth="1.6"/>
-            <path d="M120 278 l5 7 h-10 z" fill="var(--stbd)"/>
-            <circle cx="120" cy="300" r="2" fill="var(--stbd)"/>
-            <text x="128" y="287" fill="var(--text-dim)" fontSize="9.5" fontFamily="IBM Plex Mono">G5</text>
-          </g>
-          <g>
-            <line x1="262" y1="360" x2="262" y2="346" stroke="var(--port)" strokeWidth="1.6"/>
-            <rect x="257.5" y="339" width="9" height="7" fill="var(--port)"/>
-            <circle cx="262" cy="360" r="2" fill="var(--port)"/>
-            <text x="270" y="347" fill="var(--text-dim)" fontSize="9.5" fontFamily="IBM Plex Mono">R6</text>
-          </g>
-          <g>
-            <line x1="232" y1="560" x2="232" y2="546" stroke="var(--warn)" strokeWidth="1.6"/>
-            <circle cx="232" cy="543" r="4.5" fill="var(--warn)"/>
-            <circle cx="232" cy="560" r="2" fill="var(--warn)"/>
-            <text x="240" y="547" fill="var(--text-dim)" fontSize="9.5" fontFamily="IBM Plex Mono">Skjær</text>
-          </g>
-        </g>
-      )}
-      {wind && <g>{winds}</g>}
+    <MapLibre
+      initialViewState={{ longitude: OWN_VESSEL.lon, latitude: OWN_VESSEL.lat, zoom: 11 }}
+      style={{ width: '100%', height: '100%' }}
+      mapStyle={MAP_STYLE}
+      attributionControl={false}
+    >
       {route && (
-        <g>
-          <polyline points={ROUTE_PTS.map(p => `${p.x},${p.y}`).join(' ')}
-            fill="none" stroke="var(--accent)" strokeWidth="2.4"
-            strokeDasharray="1 8" strokeLinecap="round" opacity="0.95" />
-          {ROUTE_PTS.map((p, i) => (
-            <g key={i}>
-              <circle cx={p.x} cy={p.y} r={i === 0 ? 5 : 6.5} fill="var(--bg)" stroke="var(--accent)" strokeWidth="2.2" />
-              {i > 0 && <text x={p.x} y={p.y + 3.3} textAnchor="middle" fontSize="8.5"
-                fontWeight="700" fill="var(--accent)" fontFamily="Barlow Semi Condensed">{i}</text>}
-            </g>
-          ))}
-        </g>
+        <Source id="route" type="geojson" data={ROUTE_GEOJSON}>
+          <Layer id="route-line" type="line" paint={{ 'line-color': '#ff7a1a', 'line-width': 2.5, 'line-dasharray': [1, 4] }} />
+        </Source>
       )}
-      <g transform={`translate(${boat.x} ${boat.y})`}>
-        <circle r="46" fill="var(--accent-soft)" />
-        <circle r="46" fill="none" stroke="var(--accent)" strokeWidth="1" strokeOpacity="0.4" />
-        <g transform={`rotate(${boat.hdg})`}>
-          <line x1="0" y1="0" x2="0" y2="-118" stroke="var(--accent)" strokeWidth="1.6"
-            strokeDasharray="2 6" opacity="0.8" />
-          <path d="M0 -16 L9 10 L0 4 L-9 10 Z" fill="var(--accent)"
-            stroke="#0b0500" strokeWidth="1.2" strokeLinejoin="round" />
-        </g>
-      </g>
-    </svg>
+      {route && ROUTE_COORDS.map((coord, i) => (
+        <Marker key={i} longitude={coord[0]} latitude={coord[1]} anchor="center">
+          <div style={{
+            width: 18, height: 18, borderRadius: 9,
+            background: i === 0 || i === ROUTE_COORDS.length - 1 ? '#ff7a1a' : '#060d13',
+            border: '2px solid #ff7a1a',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 8.5, fontWeight: 700, color: '#0b0500',
+            fontFamily: 'Barlow Semi Condensed, Barlow, sans-serif',
+          }}>
+            {i > 0 && i < ROUTE_COORDS.length - 1 ? i : ''}
+          </div>
+        </Marker>
+      ))}
+      <Marker longitude={OWN_VESSEL.lon} latitude={OWN_VESSEL.lat} anchor="center">
+        <OwnVesselMarker hdg={OWN_VESSEL.hdg} />
+      </Marker>
+    </MapLibre>
   )
 }
 
@@ -221,7 +177,7 @@ function ChartScreen({ night, onTab, onNightToggle }: { night: boolean; onTab: (
   return (
     <div className={'scr' + (night ? ' seil-night' : '')}>
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <ChartMap />
+        <SeilMap />
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 120,
           background: 'linear-gradient(to bottom, var(--scrim), transparent)', zIndex: 10 }} />
         <StatusBar over time={night ? '02:14' : '13:42'} />
@@ -283,16 +239,16 @@ function ChartScreen({ night, onTab, onNightToggle }: { night: boolean; onTab: (
             { lab: 'Dybde', val: '18.4', unit: 'm', color: '' },
             { lab: 'TWS', val: '12', unit: 'kn', color: '' },
           ].map(({ lab, val, unit, color }, i) => (
-            <>
-              {i > 0 && <div key={`d${i}`} style={{ width: 1, height: 30, background: 'var(--hairline-strong)' }} />}
-              <div key={lab} className="dchip" style={{ flex: 1 }}>
+            <React.Fragment key={lab}>
+              {i > 0 && <div style={{ width: 1, height: 30, background: 'var(--hairline-strong)' }} />}
+              <div className="dchip" style={{ flex: 1 }}>
                 <span className="lab">{lab}</span>
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
                   <span className="val" style={{ fontSize: 26, color: color || 'var(--text)' }}>{val}</span>
                   <span className="unit">{unit}</span>
                 </span>
               </div>
-            </>
+            </React.Fragment>
           ))}
         </div>
       </div>
@@ -473,7 +429,7 @@ function RouteScreen({ onTab }: { onTab: (s: Screen) => void }) {
   return (
     <div className="scr">
       <div style={{ position:'relative', flex:1, minHeight:0 }}>
-        <ChartMap route marks={false} />
+        <SeilMap route />
         <div style={{ position:'absolute', top:0, left:0, right:0, height:110,
           background:'linear-gradient(to bottom, var(--scrim), transparent)', zIndex:10 }} />
         <StatusBar over />
@@ -551,7 +507,7 @@ function WeatherScreen({ onTab }: { onTab: (s: Screen) => void }) {
   return (
     <div className="scr">
       <div style={{ position:'relative', flex:1, minHeight:0 }}>
-        <ChartMap wind marks={false} grid={false} />
+        <SeilMap />
         <div style={{ position:'absolute', top:0, left:0, right:0, height:110,
           background:'linear-gradient(to bottom, var(--scrim), transparent)', zIndex:10 }} />
         <StatusBar over />
