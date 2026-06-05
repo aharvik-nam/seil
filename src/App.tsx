@@ -397,8 +397,17 @@ function useAis(own: OwnVessel) {
   return { vessels, loading, error, updated }
 }
 
-function useWind(own: OwnVessel) {
-  const [wind, setWind] = useState<WindData | null>(null)
+interface HourlyWx {
+  time: Date
+  tws: number     // knop
+  twd: number     // grader fra
+  temp: number    // °C
+  precip: number  // mm/t
+  pressure: number // hPa
+}
+
+function useWeather(own: OwnVessel): { current: WindData | null; hourly: HourlyWx[] } {
+  const [data, setData] = useState<{ current: WindData | null; hourly: HourlyWx[] }>({ current: null, hourly: [] })
   useEffect(() => {
     async function load() {
       try {
@@ -408,15 +417,113 @@ function useWind(own: OwnVessel) {
         )
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const d = await r.json()
-        const det = d.properties?.timeseries?.[0]?.data?.instant?.details
-        if (det) setWind({ tws: +(det.wind_speed * 1.944).toFixed(1), twd: Math.round(det.wind_from_direction), temp: +det.air_temperature.toFixed(1) })
+        const ts: any[] = d.properties?.timeseries ?? []
+        const hourly: HourlyWx[] = ts.slice(0, 12).flatMap(t => {
+          const det = t.data?.instant?.details
+          if (!det) return []
+          return [{
+            time: new Date(t.time),
+            tws: +(det.wind_speed * 1.944).toFixed(1),
+            twd: Math.round(det.wind_from_direction ?? 0),
+            temp: +(det.air_temperature ?? 0).toFixed(1),
+            precip: t.data?.next_1_hours?.details?.precipitation_amount ?? 0,
+            pressure: Math.round(det.air_pressure_at_sea_level ?? 1013),
+          }]
+        })
+        const first = hourly[0]
+        const current = first ? { tws: first.tws, twd: first.twd, temp: first.temp } : null
+        setData({ current, hourly })
       } catch { /* silent */ }
     }
     load()
     const id = setInterval(load, 600_000)
     return () => clearInterval(id)
   }, [])
-  return wind
+  return data
+}
+
+// ─── Wind visualisation helpers ───────────────────────────────
+function windColorRgb(kn: number): [number, number, number] {
+  const stops: [number, [number, number, number]][] = [
+    [0, [44, 92, 126]], [3, [95, 184, 200]], [8, [52, 224, 127]],
+    [13, [255, 206, 69]], [18, [255, 120, 60]], [24, [255, 77, 77]], [30, [180, 20, 20]],
+  ]
+  if (kn <= stops[0][0]) return stops[0][1]
+  if (kn >= stops[stops.length - 1][0]) return stops[stops.length - 1][1]
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [k0, c0] = stops[i], [k1, c1] = stops[i + 1]
+    if (kn >= k0 && kn <= k1) {
+      const t = (kn - k0) / (k1 - k0)
+      return [0, 1, 2].map(j => Math.round(c0[j] + (c1[j] - c0[j]) * t)) as [number, number, number]
+    }
+  }
+  return stops[0][1]
+}
+
+function windColorHex(kn: number): string {
+  const [r, g, b] = windColorRgb(kn)
+  return `rgb(${r},${g},${b})`
+}
+
+function windAtPos(gx: number, gy: number, baseTws: number, baseTwd: number): { kn: number; dir: number } {
+  const noise = Math.sin(gx * 0.031 + gy * 0.017) * 0.5 + Math.cos(gx * 0.019 - gy * 0.023) * 0.5
+  return {
+    kn: Math.max(0, baseTws * (1 + noise * 0.22)),
+    dir: (baseTwd + noise * 16 + 360) % 360,
+  }
+}
+
+function WindHeatmap({ tws, twd }: { tws: number; twd: number }): ReactElement {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const cv = ref.current
+    if (!cv) return
+    const W = 78, H = 160
+    cv.width = W; cv.height = H
+    const ctx = cv.getContext('2d')!
+    const img = ctx.createImageData(W, H)
+    for (let j = 0; j < H; j++) {
+      for (let i = 0; i < W; i++) {
+        const { kn } = windAtPos(i * (390 / W), j * (820 / H), tws, twd)
+        const [r, g, b] = windColorRgb(kn)
+        const o = (j * W + i) * 4
+        img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 135
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }, [tws, twd])
+  return (
+    <canvas ref={ref} style={{
+      position: 'absolute', inset: 0, width: '100%', height: '100%',
+      objectFit: 'cover', imageRendering: 'auto', pointerEvents: 'none', zIndex: 4
+    }} />
+  )
+}
+
+function WindBarbs({ tws, twd }: { tws: number; twd: number }): ReactElement {
+  const cols = 6, rows = 9
+  const barbs: ReactElement[] = []
+  for (let gy = 0; gy < rows; gy++) {
+    for (let gx = 0; gx < cols; gx++) {
+      const x = (gx + 0.5) * (390 / cols)
+      const y = (gy + 0.5) * (820 / rows)
+      const { kn, dir } = windAtPos(x, y, tws, twd)
+      if (kn < 0.5) continue
+      const col = windColorHex(kn)
+      barbs.push(
+        <g key={`${gx}-${gy}`} transform={`translate(${x} ${y}) rotate(${dir})`}>
+          <line x1="0" y1="-13" x2="0" y2="13" stroke={col} strokeWidth="2.2" strokeLinecap="round" />
+          <path d="M0 -13 L5 -5 M0 -13 L-5 -5" stroke={col} strokeWidth="2.2" strokeLinecap="round" fill="none" />
+        </g>
+      )
+    }
+  }
+  return (
+    <svg viewBox="0 0 390 820" preserveAspectRatio="xMidYMid slice"
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 6, pointerEvents: 'none' }}>
+      {barbs}
+    </svg>
+  )
 }
 
 // ─── Vessel info sheet ────────────────────────────────────────
@@ -534,6 +641,9 @@ function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind, term = '
           <div className="fab" style={{ width: 48, height: 48 }} onClick={onNightToggle}>
             <Icon name={night ? 'sun' : 'moon'} size={21} style={{ color: night ? 'var(--accent)' : undefined }} />
           </div>
+          <div className="fab" style={{ width: 48, height: 48 }} onClick={() => onTab('weather')}>
+            <Icon name="wind" size={21} />
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', boxShadow: '0 4px 16px rgba(0,0,0,.3)' }}>
             <div className="fab" style={{ width: 48, height: 48, borderRadius: '14px 14px 0 0',
               borderBottom: '1px solid var(--hairline)' }}><Icon name="plus" size={22} /></div>
@@ -544,37 +654,7 @@ function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind, term = '
           </div>
         </div>
 
-        {wind && (
-          <div style={{ position: 'absolute', left: 14, bottom: 170, zIndex: 20,
-            background: 'var(--scrim)', backdropFilter: 'blur(10px)',
-            border: '1px solid var(--hairline)', borderRadius: 'var(--r-md)',
-            padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ position: 'relative', width: 44, height: 44 }}>
-              <svg width="44" height="44" viewBox="0 0 44 44">
-                <circle cx="22" cy="22" r="20" fill="none" stroke="var(--hairline-strong)" strokeWidth="1.5" />
-                {['N','Ø','S','V'].map((d, i) => (
-                  <text key={d} x="22" y="22" textAnchor="middle" dominantBaseline="middle"
-                    fontSize="7" fontWeight="700" fill="var(--text-faint)" fontFamily="var(--ui)"
-                    transform={`rotate(${i*90} 22 22) translate(0 -12)`}>{d}</text>
-                ))}
-                <g transform={`rotate(${wind.twd} 22 22)`}>
-                  <path d="M22 6 L25 18 L22 16 L19 18 Z" fill="var(--ais)" />
-                  <path d="M22 38 L25 26 L22 28 L19 26 Z" fill="var(--text-faint)" opacity="0.5" />
-                </g>
-              </svg>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.2, color: 'var(--text-faint)', textTransform: 'uppercase' }}>Vind · Bf {windBeaufort(wind.tws)}</div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
-                <span className="disp" style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, color: 'var(--ais)' }}>{wind.tws}</span>
-                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>kn</span>
-              </div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>fra {windCardinal(wind.twd)} · {wind.temp}°C</div>
-            </div>
-          </div>
-        )}
-
-        <div style={{ position: 'absolute', left: 18, bottom: 116, zIndex: 20 }}>
+<div style={{ position: 'absolute', left: 18, bottom: 116, zIndex: 20 }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
             <svg width="86" height="14" viewBox="0 0 86 14">
               <path d="M1 4 V13 M85 4 V13 M1 13 H85" stroke="var(--text)" strokeWidth="1.6" fill="none" strokeOpacity=".85" />
@@ -835,78 +915,197 @@ function RouteScreen({ onTab }: { onTab: (s: Screen) => void }) {
 }
 
 // ─── Screen 4: Weather ────────────────────────────────────────
-function WeatherScreen({ onTab }: { onTab: (s: Screen) => void }) {
-  const hours = ['10','13','16','19','22','01','04']
-  const active = 1
+type WxTab = 'vind' | 'bolger' | 'regn' | 'trykk'
+type VizMode = 'heat' | 'barbs' | 'both'
+
+function WeatherScreen({ onTab, night = false, hourly = [], mapStyle = 'sjokar' }: {
+  onTab: (s: Screen) => void
+  night?: boolean
+  hourly?: HourlyWx[]
+  mapStyle?: MapStyle
+}) {
+  const [wxTab, setWxTab] = useState<WxTab>('vind')
+  const [viz, setViz] = useState<VizMode>('both')
+  const [activeHour, setActiveHour] = useState(0)
+
+  const wx = hourly[activeHour] ?? null
+  const displayHours = hourly.slice(0, 7)
+  const timeLabel = wx ? `${wx.time.getHours().toString().padStart(2,'0')}:00` : '–'
+  const headerText = wx ? `fra ${windCardinal(wx.twd)} ${wx.tws} kn` : 'Laster…'
+
   return (
-    <div className="scr">
+    <div className={'scr' + (night ? ' seil-night' : '')}>
       <div style={{ position:'relative', flex:1, minHeight:0 }}>
-        <SeilMap />
-        <div style={{ position:'absolute', top:0, left:0, right:0, height:110,
-          background:'linear-gradient(to bottom, var(--scrim), transparent)', zIndex:10 }} />
-        <StatusBar over />
+        <SeilMap mapStyle={mapStyle} />
+
+        {/* Wind overlays */}
+        {wxTab === 'vind' && wx && (viz === 'heat' || viz === 'both') && <WindHeatmap tws={wx.tws} twd={wx.twd} />}
+        {wxTab === 'vind' && wx && (viz === 'barbs' || viz === 'both') && <WindBarbs tws={wx.tws} twd={wx.twd} />}
+
+        {/* Gradient top */}
+        <div style={{ position:'absolute', top:0, left:0, right:0, height:110, zIndex:8,
+          background:'linear-gradient(to bottom, var(--scrim), transparent)' }} />
+        <StatusBar over time={night ? '02:14' : undefined} />
+
+        {/* Header */}
         <div style={{ position:'absolute', top:50, left:14, right:14, zIndex:20, display:'flex', alignItems:'center', gap:10 }}>
-          <div className="fab" style={{ width:44, height:44 }} onClick={() => onTab('chart')}><Icon name="back" size={22} /></div>
+          <div className="fab" style={{ width:44, height:44, cursor:'pointer' }} onClick={() => onTab('chart')}>
+            <Icon name="back" size={22} />
+          </div>
           <div className="pill" style={{ flex:1, justifyContent:'space-between', height:44,
             background:'var(--scrim)', backdropFilter:'blur(8px)' }}>
             <span style={{ fontWeight:700, whiteSpace:'nowrap' }}>Væroverlegg</span>
-            <span className="sectlabel" style={{ fontSize:10, color:'var(--accent)', whiteSpace:'nowrap' }}>SV 12 KN · G18</span>
+            <span className="sectlabel" style={{ fontSize:10, color:'var(--accent)', whiteSpace:'nowrap' }}>{headerText}</span>
           </div>
         </div>
+
+        {/* Tab selector */}
         <div style={{ position:'absolute', top:104, left:14, right:14, zIndex:20,
           display:'flex', gap:6, padding:4, background:'var(--scrim)', backdropFilter:'blur(8px)',
           border:'1px solid var(--hairline)', borderRadius:'var(--r-pill)' }}>
-          {['Vind','Bølger','Regn','Trykk'].map((l,i) => (
-            <div key={l} style={{ flex:1, height:34, borderRadius:'var(--r-pill)',
-              display:'flex', alignItems:'center', justifyContent:'center',
-              background:i===0?'var(--accent)':'transparent',
-              color:i===0?'#0b0500':'var(--text-dim)', fontWeight:700, fontSize:13 }}>{l}</div>
-          ))}
+          {(['vind','bolger','regn','trykk'] as WxTab[]).map((tab, i) => {
+            const labels = ['Vind','Bølger','Regn','Trykk']
+            const on = wxTab === tab
+            return (
+              <div key={tab} onClick={() => setWxTab(tab)} style={{ flex:1, height:34, borderRadius:'var(--r-pill)',
+                display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
+                background:on?'var(--accent)':'transparent',
+                color:on?'#0b0500':'var(--text-dim)', fontWeight:700, fontSize:13 }}>{labels[i]}</div>
+            )
+          })}
         </div>
-        <div style={{ position:'absolute', left:16, bottom:132, zIndex:20,
-          padding:'10px 12px', background:'var(--scrim)', backdropFilter:'blur(8px)',
-          border:'1px solid var(--hairline)', borderRadius:'var(--r-md)' }}>
-          <div className="sectlabel" style={{ fontSize:9.5, marginBottom:7 }}>Vindstyrke · kn</div>
-          <div style={{ width:132, height:8, borderRadius:4,
-            background:'linear-gradient(90deg, #5fb8c8, var(--go), var(--warn), var(--danger))' }} />
-          <div className="mono tnum" style={{ display:'flex', justifyContent:'space-between',
-            fontSize:9.5, color:'var(--text-dim)', marginTop:4, width:132 }}>
-            <span>0</span><span>10</span><span>20</span><span>30+</span>
+
+        {/* Viz toggle (Vind only) */}
+        {wxTab === 'vind' && (
+          <div style={{ position:'absolute', top:150, left:'50%', transform:'translateX(-50%)', zIndex:20,
+            display:'flex', gap:4, padding:4, background:'var(--scrim)', backdropFilter:'blur(8px)',
+            border:'1px solid var(--hairline)', borderRadius:'var(--r-pill)' }}>
+            {(['heat','barbs','both'] as VizMode[]).map(v => (
+              <div key={v} onClick={() => setViz(v)} style={{ height:30, padding:'0 16px', borderRadius:'var(--r-pill)',
+                display:'flex', alignItems:'center', fontWeight:700, fontSize:12.5, cursor:'pointer',
+                background:viz===v?'var(--accent)':'transparent',
+                color:viz===v?'#0b0500':'var(--text-dim)' }}>
+                {v === 'heat' ? 'Felt' : v === 'barbs' ? 'Piler' : 'Begge'}
+              </div>
+            ))}
           </div>
-        </div>
+        )}
+
+        {/* Wind legend */}
+        {wxTab === 'vind' && (
+          <div style={{ position:'absolute', left:16, bottom:136, zIndex:20,
+            padding:'10px 12px', background:'var(--scrim)', backdropFilter:'blur(8px)',
+            border:'1px solid var(--hairline)', borderRadius:'var(--r-md)' }}>
+            <div className="sectlabel" style={{ fontSize:9.5, marginBottom:7 }}>Vindstyrke · kn</div>
+            <div style={{ width:132, height:8, borderRadius:4,
+              background:'linear-gradient(90deg, #5fb8c8, #34e07f, #ffce45, #ff4d4d)' }} />
+            <div className="mono tnum" style={{ display:'flex', justifyContent:'space-between',
+              fontSize:9.5, color:'var(--text-dim)', marginTop:4, width:132 }}>
+              <span>0</span><span>10</span><span>20</span><span>30+</span>
+            </div>
+          </div>
+        )}
+
+        {/* Stat cards for non-vind tabs */}
+        {wxTab !== 'vind' && wx && (
+          <div style={{ position:'absolute', left:'50%', top:'50%', transform:'translate(-50%,-50%)', zIndex:20,
+            padding:'20px 28px', background:'var(--scrim)', backdropFilter:'blur(12px)',
+            border:'1px solid var(--hairline)', borderRadius:'var(--r-lg)', textAlign:'center', minWidth:170 }}>
+            {wxTab === 'bolger' && (
+              <React.Fragment>
+                <div className="sectlabel" style={{ marginBottom:8 }}>Estimert bølgehøyde</div>
+                <div style={{ display:'flex', alignItems:'baseline', gap:5, justifyContent:'center' }}>
+                  <span className="disp" style={{ fontSize:56, fontWeight:700, color:'var(--ais)' }}>{(wx.tws / 8).toFixed(1)}</span>
+                  <span style={{ fontSize:18, color:'var(--text-dim)' }}>m</span>
+                </div>
+                <div style={{ fontSize:12, color:'var(--text-dim)', marginTop:8 }}>Vind {wx.tws} kn fra {windCardinal(wx.twd)}</div>
+              </React.Fragment>
+            )}
+            {wxTab === 'regn' && (
+              <React.Fragment>
+                <div className="sectlabel" style={{ marginBottom:8 }}>Nedbør</div>
+                <div style={{ display:'flex', alignItems:'baseline', gap:5, justifyContent:'center' }}>
+                  <span className="disp" style={{ fontSize:56, fontWeight:700, color: wx.precip > 0 ? 'var(--ais)' : 'var(--text)' }}>
+                    {wx.precip.toFixed(1)}
+                  </span>
+                  <span style={{ fontSize:18, color:'var(--text-dim)' }}>mm/t</span>
+                </div>
+                <div style={{ fontSize:12, color:'var(--text-dim)', marginTop:8 }}>
+                  {wx.precip === 0 ? 'Oppholdsvær' : wx.precip < 1 ? 'Lett regn' : wx.precip < 4 ? 'Moderat regn' : 'Kraftig regn'}
+                </div>
+                {/* Precip bar chart for visible hours */}
+                {displayHours.length > 0 && (
+                  <div style={{ display:'flex', alignItems:'flex-end', gap:4, marginTop:14, height:32 }}>
+                    {displayHours.map((h, i) => {
+                      const maxP = Math.max(...displayHours.map(x => x.precip), 0.5)
+                      const pct = h.precip / maxP
+                      return (
+                        <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+                          <div style={{ width:'100%', height: Math.max(3, pct * 28), borderRadius:2,
+                            background: h.precip > 0 ? 'var(--ais)' : 'var(--panel-3)',
+                            opacity: i === activeHour ? 1 : 0.5 }} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </React.Fragment>
+            )}
+            {wxTab === 'trykk' && (
+              <React.Fragment>
+                <div className="sectlabel" style={{ marginBottom:8 }}>Lufttrykk</div>
+                <div style={{ display:'flex', alignItems:'baseline', gap:5, justifyContent:'center' }}>
+                  <span className="disp" style={{ fontSize:56, fontWeight:700 }}>{wx.pressure}</span>
+                  <span style={{ fontSize:18, color:'var(--text-dim)' }}>hPa</span>
+                </div>
+                <div style={{ fontSize:12, color:'var(--text-dim)', marginTop:8 }}>
+                  {wx.pressure > 1020 ? '↑ Høytrykk · godt vær' : wx.pressure > 1000 ? '→ Normalt trykk' : '↓ Lavtrykk · urolig vær'}
+                </div>
+                <div style={{ fontSize:12, color:'var(--text-dim)', marginTop:4 }}>Temp {wx.temp}°C</div>
+              </React.Fragment>
+            )}
+          </div>
+        )}
+
+        {/* Time scrubber */}
         <div style={{ position:'absolute', left:0, right:0, bottom:0, zIndex:20,
           background:'linear-gradient(to top, var(--bg) 64%, transparent)', padding:'24px 16px 12px' }}>
           <div style={{ background:'var(--panel)', border:'1px solid var(--hairline)', borderRadius:'var(--r-lg)', padding:'12px 14px' }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-              <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
-                <span style={{ fontSize:15, fontWeight:700 }}>I dag 13:00</span>
-                <span className="sectlabel" style={{ fontSize:10 }}>MET · varsel +0t</span>
-              </div>
-              <div className="fab accent" style={{ width:34, height:34, borderRadius:10 }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="#0b0500"><path d="M3 2l9 5-9 5z"/></svg>
-              </div>
+            <div style={{ display:'flex', alignItems:'baseline', gap:8, marginBottom:10 }}>
+              <span style={{ fontSize:15, fontWeight:700 }}>I dag {timeLabel}</span>
+              <span className="sectlabel" style={{ fontSize:10 }}>MET Norway · Yr</span>
             </div>
-            <div style={{ position:'relative', height:30 }}>
-              <div style={{ position:'absolute', top:14, left:0, right:0, height:3, borderRadius:2, background:'var(--panel-3)' }} />
-              <div style={{ position:'absolute', top:14, left:0, width:'18%', height:3, borderRadius:2, background:'var(--accent)' }} />
-              <div style={{ display:'flex', justifyContent:'space-between', position:'relative' }}>
-                {hours.map((h,i) => (
-                  <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6 }}>
-                    <div style={{ width:i===active?14:7, height:i===active?14:7, borderRadius:8,
-                      background:i===active?'var(--accent)':'var(--panel-3)',
-                      border:i===active?'3px solid var(--bg)':'none',
-                      boxShadow:i===active?'0 0 0 1.5px var(--accent)':'none',
-                      marginTop:i===active?3:7 }} />
-                    <span className="mono tnum" style={{ fontSize:11, fontWeight:600,
-                      color:i===active?'var(--text)':'var(--text-faint)' }}>{h}</span>
-                  </div>
-                ))}
+            {displayHours.length > 0 ? (
+              <div style={{ position:'relative', height:30 }}>
+                <div style={{ position:'absolute', top:14, left:0, right:0, height:3, borderRadius:2, background:'var(--panel-3)' }} />
+                <div style={{ position:'absolute', top:14, left:0,
+                  width:`${(activeHour / Math.max(displayHours.length - 1, 1)) * 100}%`,
+                  height:3, borderRadius:2, background:'var(--accent)' }} />
+                <div style={{ display:'flex', justifyContent:'space-between', position:'relative' }}>
+                  {displayHours.map((h, i) => {
+                    const hr = h.time.getHours()
+                    const on = i === activeHour
+                    return (
+                      <div key={i} onClick={() => setActiveHour(i)}
+                        style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, cursor:'pointer' }}>
+                        <div style={{ width:on?14:7, height:on?14:7, borderRadius:8,
+                          background:on?'var(--accent)':'var(--panel-3)',
+                          border:on?'3px solid var(--bg)':'none',
+                          boxShadow:on?'0 0 0 1.5px var(--accent)':'none', marginTop:on?3:7 }} />
+                        <span className="mono tnum" style={{ fontSize:11, fontWeight:600,
+                          color:on?'var(--text)':'var(--text-faint)' }}>{hr.toString().padStart(2,'0')}</span>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div style={{ fontSize:13, color:'var(--text-faint)', textAlign:'center', padding:'8px 0' }}>Laster værdata…</div>
+            )}
           </div>
         </div>
       </div>
-      <TabNav active="chart" onTab={onTab} />
+      <TabNav active="weather" onTab={onTab} />
       <div className="home-ind" />
     </div>
   )
@@ -1160,7 +1359,7 @@ export default function App() {
   const [mapStyle, setMapStyleState] = useState<MapStyle>(() => (localStorage.getItem('seil.mapstyle') as MapStyle) || 'sjokar')
   const own = useOwnVessel()
   const { vessels, loading: aisLoading, error: aisError, updated: aisUpdated } = useAis(own)
-  const wind = useWind(own)
+  const { current: wind, hourly: wxHourly } = useWeather(own)
 
   const onTab = (s: Screen) => setScreen(s)
   const onNightToggle = () => setNight(n => !n)
@@ -1196,7 +1395,7 @@ export default function App() {
         {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} wind={wind} term={term} mapStyle={mapStyle} />}
         {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} term={term} />}
         {screen === 'route'   && <RouteScreen onTab={onTab} />}
-        {screen === 'weather' && <WeatherScreen onTab={onTab} />}
+        {screen === 'weather' && <WeatherScreen onTab={onTab} night={night} hourly={wxHourly} mapStyle={mapStyle} />}
         {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} term={term} />}
         {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} term={term} setTerm={setTerm} mapStyle={mapStyle} setMapStyle={setMapStyle} />}
       </div>
