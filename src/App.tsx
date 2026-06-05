@@ -1354,12 +1354,394 @@ function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm, 
   )
 }
 
+// ─── Tablet nav rail ──────────────────────────────────────────
+const TABLET_TABS: { id: Screen; icon: string; label: string }[] = [
+  { id: 'chart',   icon: '⚓', label: 'Kart' },
+  { id: 'instr',   icon: '📊', label: 'Instr.' },
+  { id: 'route',   icon: '🗺', label: 'Rute' },
+  { id: 'ais',     icon: '🚢', label: 'AIS' },
+  { id: 'weather', icon: '🌬', label: 'Vær' },
+  { id: 'more',    icon: '⚙️', label: 'Mer' },
+]
+
+function TabletNavRail({ active, onTab, night }: { active: Screen; onTab: (s: Screen) => void; night: boolean }) {
+  const bg = night ? '#0a0d12' : '#0e1520'
+  const accent = '#2979ff'
+  return (
+    <div style={{
+      width: 80,
+      height: '100%',
+      background: bg,
+      borderRight: '1px solid rgba(255,255,255,0.07)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      paddingTop: 20,
+      paddingBottom: 16,
+      flexShrink: 0,
+      gap: 4,
+    }}>
+      {/* Logo */}
+      <div style={{
+        width: 44, height: 44,
+        borderRadius: 12,
+        background: accent,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 22,
+        marginBottom: 20,
+        boxShadow: '0 2px 12px rgba(41,121,255,0.4)',
+      }}>⛵</div>
+
+      {TABLET_TABS.map(tab => {
+        const isActive = active === tab.id
+        return (
+          <button key={tab.id} onClick={() => onTab(tab.id)} style={{
+            width: 64,
+            padding: '10px 0',
+            borderRadius: 12,
+            background: isActive ? 'rgba(41,121,255,0.18)' : 'transparent',
+            border: isActive ? '1px solid rgba(41,121,255,0.35)' : '1px solid transparent',
+            cursor: 'pointer',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+            transition: 'all 0.15s',
+          }}>
+            <span style={{ fontSize: 20 }}>{tab.icon}</span>
+            <span style={{
+              fontSize: 10, fontFamily: 'system-ui', fontWeight: 600,
+              color: isActive ? accent : 'rgba(255,255,255,0.45)',
+              letterSpacing: '0.3px',
+            }}>{tab.label}</span>
+          </button>
+        )
+      })}
+
+      {/* spacer + version */}
+      <div style={{ flex: 1 }} />
+      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.2)', fontFamily: 'system-ui' }}>SEIL</div>
+    </div>
+  )
+}
+
+// ─── Tablet side panel ────────────────────────────────────────
+function TabletSidePanel({
+  own, wind, vessels, term, night, hourly,
+}: {
+  own: OwnVessel; wind: WindData | null; vessels: AisVessel[];
+  term: Term; night: boolean; hourly: HourlyWx[];
+}) {
+  const bg = night ? '#0a0d12' : '#0e1520'
+  const L = LABELS[term]
+  const sog = own.speed ?? 0
+  const cog = own.course ?? 0
+  const tws = wind?.tws ?? 0
+  const twd = wind?.twd ?? 0
+  const riskVessel = vessels.find(v => v.cpa !== undefined && v.cpa < 0.5)
+  const nearestVessel = vessels.length > 0
+    ? vessels.reduce((a, b) => ((a.cpa ?? 99) < (b.cpa ?? 99) ? a : b))
+    : null
+
+  const BigNum = ({ val, unit, label, color = '#fff' }: { val: string; unit: string; label: string; color?: string }) => (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontFamily: 'system-ui', fontWeight: 600, letterSpacing: '0.6px', textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+        <span style={{ fontSize: 48, fontWeight: 700, fontFamily: 'system-ui', color, lineHeight: 1 }}>{val}</span>
+        <span style={{ fontSize: 16, color: 'rgba(255,255,255,0.45)', fontFamily: 'system-ui' }}>{unit}</span>
+      </div>
+    </div>
+  )
+
+  const Divider = () => <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '4px 0' }} />
+
+  const SmallRow = ({ label, val, unit }: { label: string; val: string; unit?: string }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '6px 0' }}>
+      <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', fontFamily: 'system-ui' }}>{label}</span>
+      <span style={{ fontSize: 18, fontWeight: 700, fontFamily: 'system-ui', color: '#fff' }}>
+        {val}<span style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginLeft: 3 }}>{unit}</span>
+      </span>
+    </div>
+  )
+
+  // Wind direction arrow
+  const WindArrow = () => {
+    const clr = windColorHex(tws)
+    const rad = ((twd - 90) * Math.PI) / 180
+    const cx = 20, cy = 20, r = 14
+    const tx = cx + r * Math.cos(rad)
+    const ty = cy + r * Math.sin(rad)
+    return (
+      <svg width={40} height={40}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={1.5} />
+        <line x1={cx} y1={cy} x2={tx} y2={ty} stroke={clr} strokeWidth={2.5} strokeLinecap="round" />
+        <circle cx={tx} cy={ty} r={3} fill={clr} />
+      </svg>
+    )
+  }
+
+  return (
+    <div style={{
+      width: 300,
+      height: '100%',
+      background: bg,
+      borderLeft: '1px solid rgba(255,255,255,0.07)',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: '24px 20px',
+      overflowY: 'auto',
+      flexShrink: 0,
+      gap: 0,
+    }}>
+      {/* SOG hero */}
+      <BigNum val={sog.toFixed(1)} unit="kn" label={L.speed} color="#f97316" />
+
+      <div style={{ marginTop: 8, marginBottom: 8 }}>
+        <SmallRow label={L.course} val={`${Math.round(cog)}°`} />
+      </div>
+
+      <Divider />
+
+      {/* Wind */}
+      <div style={{ padding: '12px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontFamily: 'system-ui', fontWeight: 600, letterSpacing: '0.6px', textTransform: 'uppercase', marginBottom: 4 }}>{L.wind}</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+            <span style={{ fontSize: 34, fontWeight: 700, fontFamily: 'system-ui', color: windColorHex(tws), lineHeight: 1 }}>{Math.round(tws)}</span>
+            <span style={{ fontSize: 14, color: 'rgba(255,255,255,0.4)' }}>kn</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>{L.windDir} {Math.round(twd)}°</div>
+        </div>
+        <WindArrow />
+      </div>
+
+      <Divider />
+
+      {/* Depth + Temp */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, padding: '12px 0' }}>
+        {[
+          { label: L.depth, val: '18', unit: 'm' },
+          { label: L.temp,  val: '14', unit: '°C' },
+        ].map(({ label, val, unit }) => (
+          <div key={label} style={{
+            background: 'rgba(255,255,255,0.05)', borderRadius: 12, padding: '10px 12px',
+          }}>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'system-ui', fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase' }}>{label}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'system-ui', color: '#fff', marginTop: 2 }}>
+              {val}<span style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)', marginLeft: 2 }}>{unit}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Divider />
+
+      {/* AIS closest */}
+      {nearestVessel && (
+        <div style={{
+          padding: '12px 14px',
+          borderRadius: 12,
+          background: riskVessel ? 'rgba(255,46,247,0.12)' : 'rgba(255,255,255,0.05)',
+          border: riskVessel ? '1px solid rgba(255,46,247,0.35)' : '1px solid transparent',
+          marginTop: 4,
+        }}>
+          <div style={{ fontSize: 10, color: riskVessel ? '#ff2ef7' : 'rgba(255,255,255,0.4)', fontFamily: 'system-ui', fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 6 }}>
+            {riskVessel ? '⚠ Fareavstand' : 'Nærmeste fartøy'}
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: 'system-ui', color: '#fff', marginBottom: 2 }}>
+            {nearestVessel.name || `MMSI ${nearestVessel.mmsi}`}
+          </div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', fontFamily: 'system-ui' }}>
+            {nearestVessel.cpa !== undefined ? `${L.cpa}: ${nearestVessel.cpa.toFixed(2)} nm` : '—'}
+          </div>
+        </div>
+      )}
+
+      {/* Weather next hours */}
+      {hourly.length > 0 && (
+        <>
+          <Divider />
+          <div style={{ paddingTop: 12 }}>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontFamily: 'system-ui', fontWeight: 600, letterSpacing: '0.6px', textTransform: 'uppercase', marginBottom: 10 }}>Neste 6 timer</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {hourly.slice(0, 6).map((h, i) => (
+                <div key={i} style={{
+                  flex: 1, background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '6px 4px',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                }}>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'system-ui' }}>
+                    {h.time.getHours().toString().padStart(2, '0')}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, fontFamily: 'system-ui', color: windColorHex(h.tws) }}>
+                    {Math.round(h.tws)}
+                  </div>
+                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', fontFamily: 'system-ui' }}>kn</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── Tablet top bar ────────────────────────────────────────────
+function TabletTopBar({ own, night, onNightToggle, mapStyle, setMapStyle }: {
+  own: OwnVessel; night: boolean; onNightToggle: () => void;
+  mapStyle: MapStyle; setMapStyle: (s: MapStyle) => void;
+}) {
+  const [showMapPicker, setShowMapPicker] = React.useState(false)
+  const lat = own.lat?.toFixed(4) ?? '—'
+  const lon = own.lon?.toFixed(4) ?? '—'
+  const now = new Date()
+  const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
+
+  const BtnStyle: React.CSSProperties = {
+    background: 'rgba(14,21,32,0.85)',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 10,
+    padding: '6px 12px',
+    color: '#fff',
+    fontSize: 13,
+    fontFamily: 'system-ui',
+    cursor: 'pointer',
+    backdropFilter: 'blur(8px)',
+    display: 'flex', alignItems: 'center', gap: 6,
+  }
+
+  return (
+    <div style={{
+      position: 'absolute', top: 16, left: 16, right: 16, zIndex: 10,
+      display: 'flex', gap: 8, alignItems: 'center',
+      pointerEvents: 'none',
+    }}>
+      {/* coords */}
+      <div style={{ ...BtnStyle, pointerEvents: 'auto', fontSize: 12 }}>
+        <span>📍</span> {lat}°N {lon}°Ø
+      </div>
+
+      <div style={{ flex: 1 }} />
+
+      {/* map style toggle */}
+      <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+        <button style={BtnStyle} onClick={() => setShowMapPicker(p => !p)}>
+          🗺 {MAP_TILE_CONFIGS[mapStyle].label}
+        </button>
+        {showMapPicker && (
+          <div style={{
+            position: 'absolute', top: '110%', right: 0,
+            background: 'rgba(14,21,32,0.95)', border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 12, padding: 8, display: 'flex', flexDirection: 'column', gap: 4,
+            backdropFilter: 'blur(16px)',
+          }}>
+            {(Object.keys(MAP_TILE_CONFIGS) as MapStyle[]).map(k => (
+              <button key={k} onClick={() => { setMapStyle(k); setShowMapPicker(false) }} style={{
+                ...BtnStyle,
+                background: mapStyle === k ? 'rgba(41,121,255,0.25)' : 'transparent',
+                border: mapStyle === k ? '1px solid rgba(41,121,255,0.4)' : '1px solid transparent',
+                pointerEvents: 'auto',
+              }}>
+                {MAP_TILE_CONFIGS[k].label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* night toggle */}
+      <button style={{ ...BtnStyle, pointerEvents: 'auto' }} onClick={onNightToggle}>
+        {night ? '☀️' : '🌙'}
+      </button>
+
+      {/* time */}
+      <div style={{ ...BtnStyle, pointerEvents: 'auto' }}>
+        🕐 {timeStr}
+      </div>
+    </div>
+  )
+}
+
+// ─── Tablet screen ────────────────────────────────────────────
+function TabletScreen({
+  screen, onTab, own, wind, vessels, night, onNightToggle,
+  term, setTerm, mapStyle, setMapStyle, hourly, aisLoading, aisError, aisUpdated,
+}: {
+  screen: Screen; onTab: (s: Screen) => void;
+  own: OwnVessel; wind: WindData | null; vessels: AisVessel[];
+  night: boolean; onNightToggle: () => void;
+  term: Term; setTerm: (t: Term) => void;
+  mapStyle: MapStyle; setMapStyle: (s: MapStyle) => void;
+  hourly: HourlyWx[]; aisLoading: boolean; aisError: string | null; aisUpdated: Date | null;
+}) {
+  const bg = night ? '#060a10' : '#0b1221'
+
+  // For non-map screens (instr, route, ais, weather, more), show full-width content panel instead
+  const isMapScreen = screen === 'chart'
+
+  return (
+    <div style={{
+      width: '100vw', height: '100dvh',
+      display: 'flex', flexDirection: 'row',
+      background: bg, overflow: 'hidden',
+    }}>
+      {/* Left nav rail */}
+      <TabletNavRail active={screen} onTab={onTab} night={night} />
+
+      {/* Center content */}
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        {isMapScreen ? (
+          <>
+            {/* Map */}
+            <SeilMap
+              own={own}
+              vessels={vessels}
+              onVesselSelect={() => {}}
+              mapStyle={mapStyle}
+            />
+            {/* Top bar overlay */}
+            <TabletTopBar own={own} night={night} onNightToggle={onNightToggle} mapStyle={mapStyle} setMapStyle={setMapStyle} />
+            {/* Zoom controls */}
+            <div style={{
+              position: 'absolute', right: 16, bottom: 40, zIndex: 10,
+              display: 'flex', flexDirection: 'column', gap: 4,
+            }}>
+              {['+', '−'].map(sym => (
+                <button key={sym} style={{
+                  width: 40, height: 40, borderRadius: 10,
+                  background: 'rgba(14,21,32,0.85)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: '#fff', fontSize: 20, cursor: 'pointer',
+                  backdropFilter: 'blur(8px)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>{sym}</button>
+              ))}
+            </div>
+          </>
+        ) : (
+          /* Non-map screens rendered in center content area */
+          <div style={{ width: '100%', height: '100%', overflow: 'hidden', background: bg }}>
+            {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} term={term} />}
+            {screen === 'route'   && <RouteScreen onTab={onTab} />}
+            {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} term={term} />}
+            {screen === 'weather' && <WeatherScreen onTab={onTab} night={night} hourly={hourly} mapStyle={mapStyle} />}
+            {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} term={term} setTerm={setTerm} mapStyle={mapStyle} setMapStyle={setMapStyle} />}
+          </div>
+        )}
+      </div>
+
+      {/* Right side panel — only on map screen */}
+      {isMapScreen && (
+        <TabletSidePanel own={own} wind={wind} vessels={vessels} term={term} night={night} hourly={hourly} />
+      )}
+    </div>
+  )
+}
+
 // ─── App shell ────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState<Screen>('chart')
   const [night, setNight] = useState(false)
   const [term, setTermState] = useState<Term>(() => (localStorage.getItem('seil.term') as Term) || 'enkel')
   const [mapStyle, setMapStyleState] = useState<MapStyle>(() => (localStorage.getItem('seil.mapstyle') as MapStyle) || 'sjokar')
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth)
   const own = useOwnVessel()
   const { vessels, loading: aisLoading, error: aisError, updated: aisUpdated } = useAis(own)
   const { current: wind, hourly: wxHourly } = useWeather(own)
@@ -1368,6 +1750,28 @@ export default function App() {
   const onNightToggle = () => setNight(n => !n)
   const setTerm = (t: Term) => { setTermState(t); localStorage.setItem('seil.term', t) }
   const setMapStyle = (s: MapStyle) => { setMapStyleState(s); localStorage.setItem('seil.mapstyle', s) }
+
+  useEffect(() => {
+    const handler = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  }, [])
+
+  const isTablet = windowWidth >= 768
+
+  if (isTablet) {
+    return (
+      <TabletScreen
+        screen={screen} onTab={onTab}
+        own={own} wind={wind} vessels={vessels}
+        night={night} onNightToggle={onNightToggle}
+        term={term} setTerm={setTerm}
+        mapStyle={mapStyle} setMapStyle={setMapStyle}
+        hourly={wxHourly}
+        aisLoading={aisLoading} aisError={aisError} aisUpdated={aisUpdated}
+      />
+    )
+  }
 
   return (
     <div style={{
@@ -1380,11 +1784,6 @@ export default function App() {
       padding: '24px 16px',
       gap: 16,
     }}>
-      {/* label */}
-      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 12, fontFamily: 'system-ui', letterSpacing: '0.5px' }}>
-        SEIL — tap tabs to navigate · moon icon toggles night vision
-      </div>
-
       {/* phone frame */}
       <div style={{
         width: 390,
