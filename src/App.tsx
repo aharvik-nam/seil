@@ -451,7 +451,16 @@ function VesselSheet({ vessel, onClose }: { vessel: AisVessel; onClose: () => vo
 }
 
 // ─── Screen 1: Chart ──────────────────────────────────────────
-function ChartScreen({ night, onTab, onNightToggle, vessels, own }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void; vessels?: AisVessel[]; own?: OwnVessel }) {
+function windCardinal(deg: number): string {
+  const dirs = ['N','NNØ','NØ','ØNØ','Ø','ØSØ','SØ','SSØ','S','SSV','SV','VSV','V','VNV','NV','NNV']
+  return dirs[Math.round(deg / 22.5) % 16]
+}
+function windBeaufort(kn: number): number {
+  const scale = [1,3,6,10,16,21,27,33,40,47,55,63]
+  return scale.findIndex(v => kn <= v) + (kn > 63 ? 12 : 0)
+}
+
+function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void; vessels?: AisVessel[]; own?: OwnVessel; wind?: WindData | null }) {
   const [selected, setSelected] = useState<AisVessel | null>(null)
   return (
     <div className={'scr' + (night ? ' seil-night' : '')} onClick={() => setSelected(null)}>
@@ -496,6 +505,36 @@ function ChartScreen({ night, onTab, onNightToggle, vessels, own }: { night: boo
           </div>
         </div>
 
+        {wind && (
+          <div style={{ position: 'absolute', left: 14, bottom: 170, zIndex: 20,
+            background: 'var(--scrim)', backdropFilter: 'blur(10px)',
+            border: '1px solid var(--hairline)', borderRadius: 'var(--r-md)',
+            padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ position: 'relative', width: 44, height: 44 }}>
+              <svg width="44" height="44" viewBox="0 0 44 44">
+                <circle cx="22" cy="22" r="20" fill="none" stroke="var(--hairline-strong)" strokeWidth="1.5" />
+                {['N','Ø','S','V'].map((d, i) => (
+                  <text key={d} x="22" y="22" textAnchor="middle" dominantBaseline="middle"
+                    fontSize="7" fontWeight="700" fill="var(--text-faint)" fontFamily="var(--ui)"
+                    transform={`rotate(${i*90} 22 22) translate(0 -12)`}>{d}</text>
+                ))}
+                <g transform={`rotate(${wind.twd} 22 22)`}>
+                  <path d="M22 6 L25 18 L22 16 L19 18 Z" fill="var(--ais)" />
+                  <path d="M22 38 L25 26 L22 28 L19 26 Z" fill="var(--text-faint)" opacity="0.5" />
+                </g>
+              </svg>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.2, color: 'var(--text-faint)', textTransform: 'uppercase' }}>Vind · Bf {windBeaufort(wind.tws)}</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
+                <span className="disp" style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, color: 'var(--ais)' }}>{wind.tws}</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>kn</span>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>fra {windCardinal(wind.twd)} · {wind.temp}°C</div>
+            </div>
+          </div>
+        )}
+
         <div style={{ position: 'absolute', left: 18, bottom: 116, zIndex: 20 }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
             <svg width="86" height="14" viewBox="0 0 86 14">
@@ -513,10 +552,10 @@ function ChartScreen({ night, onTab, onNightToggle, vessels, own }: { night: boo
           display: 'flex', alignItems: 'center', gap: 4, padding: '12px 18px 14px',
           background: 'linear-gradient(to top, var(--bg) 28%, transparent)' }}>
           {[
-            { lab: 'SOG', val: '6.2', unit: 'kn', color: 'var(--accent)' },
-            { lab: 'COG', val: '034', unit: '°', color: '' },
+            { lab: 'SOG', val: own?.sog ? own.sog.toFixed(1) : '0.0', unit: 'kn', color: 'var(--accent)' },
+            { lab: 'COG', val: own?.cog ? String(Math.round(own.cog)).padStart(3,'0') : '000', unit: '°', color: '' },
             { lab: 'Dybde', val: '18.4', unit: 'm', color: '' },
-            { lab: 'TWS', val: '12', unit: 'kn', color: '' },
+            { lab: 'TWS', val: wind ? String(wind.tws) : '–', unit: 'kn', color: '' },
           ].map(({ lab, val, unit, color }, i) => (
             <React.Fragment key={lab}>
               {i > 0 && <div style={{ width: 1, height: 30, background: 'var(--hairline-strong)' }} />}
@@ -1094,7 +1133,7 @@ export default function App() {
         position: 'relative',
         flexShrink: 0,
       }}>
-        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} />}
+        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} wind={wind} />}
         {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} />}
         {screen === 'route'   && <RouteScreen onTab={onTab} />}
         {screen === 'weather' && <WeatherScreen onTab={onTab} />}
