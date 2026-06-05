@@ -183,12 +183,13 @@ function projectPos(lat: number, lon: number, cogDeg: number, sog: number, minut
 
 function AisMarker({ vessel, onClick }: { vessel: AisVessel; onClick?: () => void }): ReactElement {
   const isRisk = vessel.cpa < 0.5 && vessel.tcpa > 0 && vessel.tcpa < 20
-  const col = isRisk ? '#ff4d4d' : '#3ad2ff'
+  const fill = isRisk ? '#ff2ef7' : '#ffffff'
+  const stroke = isRisk ? '#7a006e' : '#0a1422'
   return (
     <div onClick={e => { e.stopPropagation(); onClick?.() }} style={{ cursor: 'pointer', padding: 6 }}>
       <div style={{ transform: `rotate(${vessel.cog}deg)` }}>
         <svg width="20" height="20" viewBox="0 0 24 24">
-          <path d="M12 4 L17 19 L12 16 L7 19 Z" fill={col} stroke="#060d13" strokeWidth="1.2" strokeLinejoin="round" />
+          <path d="M12 4 L17 19 L12 16 L7 19 Z" fill={fill} stroke={stroke} strokeWidth="1.6" strokeLinejoin="round" />
         </svg>
       </div>
     </div>
@@ -512,8 +513,10 @@ function WindBarbs({ tws, twd }: { tws: number; twd: number }): ReactElement {
       const col = windColorHex(kn)
       barbs.push(
         <g key={`${gx}-${gy}`} transform={`translate(${x} ${y}) rotate(${dir})`}>
-          <line x1="0" y1="-13" x2="0" y2="13" stroke={col} strokeWidth="2.2" strokeLinecap="round" />
-          <path d="M0 -13 L5 -5 M0 -13 L-5 -5" stroke={col} strokeWidth="2.2" strokeLinecap="round" fill="none" />
+          <line x1="0" y1="-15" x2="0" y2="15" stroke="#0a1422" strokeWidth="6" strokeLinecap="round" opacity="0.35" />
+          <line x1="0" y1="-15" x2="0" y2="15" stroke={col} strokeWidth="4" strokeLinecap="round" />
+          <path d="M0 -15 L8 -5 M0 -15 L-8 -5" stroke="#0a1422" strokeWidth="5" strokeLinecap="round" fill="none" opacity="0.35" />
+          <path d="M0 -15 L8 -5 M0 -15 L-8 -5" stroke={col} strokeWidth="3.5" strokeLinecap="round" fill="none" />
         </g>
       )
     }
