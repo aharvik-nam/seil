@@ -767,7 +767,7 @@ function DepthSpark() {
   )
 }
 
-function InstrumentScreen({ onTab, wind, term = 'enkel' }: { onTab: (s: Screen) => void; wind?: WindData | null; term?: Term }) {
+function InstrumentScreen({ onTab, wind, term = 'enkel', tabletMode = false }: { onTab: (s: Screen) => void; wind?: WindData | null; term?: Term; tabletMode?: boolean }) {
   const L = LABELS[term]
   const Tile = ({ children, style, pad = 16 }: { children: React.ReactNode; style?: CSSProperties; pad?: number }) => (
     <div style={{ background:'var(--panel)', border:'1px solid var(--hairline)', borderRadius:'var(--r-lg)', padding:pad, position:'relative', ...style }}>{children}</div>
@@ -821,8 +821,8 @@ function InstrumentScreen({ onTab, wind, term = 'enkel' }: { onTab: (s: Screen) 
           </Tile>
         </div>
       </div>
-      <TabNav active="instr" onTab={onTab} />
-      <div className="home-ind" />
+      {!tabletMode && <TabNav active="instr" onTab={onTab} />}
+      {!tabletMode && <div className="home-ind" />}
     </div>
   )
 }
@@ -842,7 +842,7 @@ const LEGS = [
   { brg:'022°', dist:'2,4', eta:'15:04' },
 ]
 
-function RouteScreen({ onTab }: { onTab: (s: Screen) => void }) {
+function RouteScreen({ onTab, tabletMode = false }: { onTab: (s: Screen) => void; tabletMode?: boolean }) {
   return (
     <div className="scr">
       <div style={{ position:'relative', flex:1, minHeight:0 }}>
@@ -911,8 +911,8 @@ function RouteScreen({ onTab }: { onTab: (s: Screen) => void }) {
           </div>
         </div>
       </div>
-      <TabNav active="route" onTab={onTab} />
-      <div className="home-ind" />
+      {!tabletMode && <TabNav active="route" onTab={onTab} />}
+      {!tabletMode && <div className="home-ind" />}
     </div>
   )
 }
@@ -921,11 +921,12 @@ function RouteScreen({ onTab }: { onTab: (s: Screen) => void }) {
 type WxTab = 'vind' | 'bolger' | 'regn' | 'trykk'
 type VizMode = 'heat' | 'barbs' | 'both'
 
-function WeatherScreen({ onTab, night = false, hourly = [], mapStyle = 'sjokar' }: {
+function WeatherScreen({ onTab, night = false, hourly = [], mapStyle = 'sjokar', tabletMode = false }: {
   onTab: (s: Screen) => void
   night?: boolean
   hourly?: HourlyWx[]
   mapStyle?: MapStyle
+  tabletMode?: boolean
 }) {
   const [wxTab, setWxTab] = useState<WxTab>('vind')
   const [viz, setViz] = useState<VizMode>('both')
@@ -1108,20 +1109,21 @@ function WeatherScreen({ onTab, night = false, hourly = [], mapStyle = 'sjokar' 
           </div>
         </div>
       </div>
-      <TabNav active="weather" onTab={onTab} />
-      <div className="home-ind" />
+      {!tabletMode && <TabNav active="weather" onTab={onTab} />}
+      {!tabletMode && <div className="home-ind" />}
     </div>
   )
 }
 
 // ─── Screen 5: AIS ────────────────────────────────────────────
-function AisScreen({ onTab, vessels, loading, error, updated, term = 'enkel' }: {
+function AisScreen({ onTab, vessels, loading, error, updated, term = 'enkel', tabletMode = false }: {
   onTab: (s: Screen) => void
   vessels: AisVessel[]
   loading: boolean
   error: string | null
   updated: Date | null
   term?: Term
+  tabletMode?: boolean
 }) {
   const L = LABELS[term]
   const riskCount = vessels.filter(v => v.cpa < 0.5 && v.tcpa < 20).length
@@ -1216,14 +1218,14 @@ function AisScreen({ onTab, vessels, loading, error, updated, term = 'enkel' }: 
           )
         })}
       </div>
-      <TabNav active="ais" onTab={onTab} />
-      <div className="home-ind" />
+      {!tabletMode && <TabNav active="ais" onTab={onTab} />}
+      {!tabletMode && <div className="home-ind" />}
     </div>
   )
 }
 
 // ─── Screen 6: Settings ───────────────────────────────────────
-function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm, mapStyle = 'sjokar', setMapStyle }: { onTab: (s: Screen) => void; night: boolean; onNightToggle: () => void; term?: Term; setTerm?: (t: Term) => void; mapStyle?: MapStyle; setMapStyle?: (s: MapStyle) => void }) {
+function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm, mapStyle = 'sjokar', setMapStyle, tabletMode = false }: { onTab: (s: Screen) => void; night: boolean; onNightToggle: () => void; term?: Term; setTerm?: (t: Term) => void; mapStyle?: MapStyle; setMapStyle?: (s: MapStyle) => void; tabletMode?: boolean }) {
   const SRow = ({ icon, label, value, chev, toggle, on, last }: {
     icon:string; label:string; value?:string; chev?:boolean; toggle?:boolean; on?:boolean; last?:boolean
   }) => (
@@ -1348,8 +1350,8 @@ function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm, 
           <SRow icon="info" label="Kallesignal" value="LA1234" chev last />
         </Group>
       </div>
-      <TabNav active="more" onTab={onTab} />
-      <div className="home-ind" />
+      {!tabletMode && <TabNav active="more" onTab={onTab} />}
+      {!tabletMode && <div className="home-ind" />}
     </div>
   )
 }
@@ -1659,6 +1661,72 @@ function TabletTopBar({ own, night, onNightToggle, mapStyle, setMapStyle }: {
   )
 }
 
+// ─── Tablet right panel (always visible, content changes per tab) ──
+function TabletRightPanel({
+  screen, onTab, own, wind, vessels, night, onNightToggle,
+  term, setTerm, mapStyle, setMapStyle, hourly, aisLoading, aisError, aisUpdated,
+}: {
+  screen: Screen; onTab: (s: Screen) => void;
+  own: OwnVessel; wind: WindData | null; vessels: AisVessel[];
+  night: boolean; onNightToggle: () => void;
+  term: Term; setTerm: (t: Term) => void;
+  mapStyle: MapStyle; setMapStyle: (s: MapStyle) => void;
+  hourly: HourlyWx[]; aisLoading: boolean; aisError: string | null; aisUpdated: Date | null;
+}) {
+  const bg = night ? '#0a0d12' : '#0e1520'
+
+  // Panel label header for non-chart screens
+  const panelTitles: Partial<Record<Screen, string>> = {
+    instr: 'Instrument', route: 'Rute', ais: 'AIS', weather: 'Vær', more: 'Innstillinger',
+  }
+
+  return (
+    <div style={{
+      width: 360,
+      height: '100%',
+      background: bg,
+      borderLeft: '1px solid rgba(255,255,255,0.07)',
+      display: 'flex',
+      flexDirection: 'column',
+      flexShrink: 0,
+      overflow: 'hidden',
+    }}>
+      {screen === 'chart' ? (
+        /* Default: instrument data side rail */
+        <TabletSidePanel own={own} wind={wind} vessels={vessels} term={term} night={night} hourly={hourly} />
+      ) : (
+        /* Other screens rendered in panel (no bottom nav) */
+        <div style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          {/* Panel header */}
+          <div style={{
+            padding: '16px 20px 12px',
+            borderBottom: '1px solid rgba(255,255,255,0.07)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            flexShrink: 0,
+          }}>
+            <span style={{ fontSize: 15, fontWeight: 700, fontFamily: 'system-ui', color: '#fff' }}>
+              {panelTitles[screen] ?? ''}
+            </span>
+            <button onClick={() => onTab('chart')} style={{
+              background: 'rgba(255,255,255,0.08)', border: 'none', borderRadius: 8,
+              color: 'rgba(255,255,255,0.6)', fontSize: 12, fontFamily: 'system-ui',
+              padding: '4px 10px', cursor: 'pointer',
+            }}>← Kart</button>
+          </div>
+          {/* Screen content */}
+          <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+            {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} term={term} tabletMode />}
+            {screen === 'route'   && <RouteScreen onTab={onTab} tabletMode />}
+            {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} term={term} tabletMode />}
+            {screen === 'weather' && <WeatherScreen onTab={onTab} night={night} hourly={hourly} mapStyle={mapStyle} tabletMode />}
+            {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} term={term} setTerm={setTerm} mapStyle={mapStyle} setMapStyle={setMapStyle} tabletMode />}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Tablet screen ────────────────────────────────────────────
 function TabletScreen({
   screen, onTab, own, wind, vessels, night, onNightToggle,
@@ -1673,64 +1741,47 @@ function TabletScreen({
 }) {
   const bg = night ? '#060a10' : '#0b1221'
 
-  // For non-map screens (instr, route, ais, weather, more), show full-width content panel instead
-  const isMapScreen = screen === 'chart'
-
   return (
     <div style={{
       width: '100vw', height: '100dvh',
       display: 'flex', flexDirection: 'row',
       background: bg, overflow: 'hidden',
     }}>
-      {/* Left nav rail */}
+      {/* Left nav rail — always visible */}
       <TabletNavRail active={screen} onTab={onTab} night={night} />
 
-      {/* Center content */}
+      {/* Center — map ALWAYS visible */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        {isMapScreen ? (
-          <>
-            {/* Map */}
-            <SeilMap
-              own={own}
-              vessels={vessels}
-              onVesselSelect={() => {}}
-              mapStyle={mapStyle}
-            />
-            {/* Top bar overlay */}
-            <TabletTopBar own={own} night={night} onNightToggle={onNightToggle} mapStyle={mapStyle} setMapStyle={setMapStyle} />
-            {/* Zoom controls */}
-            <div style={{
-              position: 'absolute', right: 16, bottom: 40, zIndex: 10,
-              display: 'flex', flexDirection: 'column', gap: 4,
-            }}>
-              {['+', '−'].map(sym => (
-                <button key={sym} style={{
-                  width: 40, height: 40, borderRadius: 10,
-                  background: 'rgba(14,21,32,0.85)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  color: '#fff', fontSize: 20, cursor: 'pointer',
-                  backdropFilter: 'blur(8px)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>{sym}</button>
-              ))}
-            </div>
-          </>
-        ) : (
-          /* Non-map screens rendered in center content area */
-          <div style={{ width: '100%', height: '100%', overflow: 'hidden', background: bg }}>
-            {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} term={term} />}
-            {screen === 'route'   && <RouteScreen onTab={onTab} />}
-            {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} term={term} />}
-            {screen === 'weather' && <WeatherScreen onTab={onTab} night={night} hourly={hourly} mapStyle={mapStyle} />}
-            {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} term={term} setTerm={setTerm} mapStyle={mapStyle} setMapStyle={setMapStyle} />}
-          </div>
-        )}
+        <SeilMap own={own} vessels={vessels} onVesselSelect={() => {}} mapStyle={mapStyle} />
+        <TabletTopBar own={own} night={night} onNightToggle={onNightToggle} mapStyle={mapStyle} setMapStyle={setMapStyle} />
+        {/* Zoom controls */}
+        <div style={{
+          position: 'absolute', right: 16, bottom: 40, zIndex: 10,
+          display: 'flex', flexDirection: 'column', gap: 4,
+        }}>
+          {['+', '−'].map(sym => (
+            <button key={sym} style={{
+              width: 40, height: 40, borderRadius: 10,
+              background: 'rgba(14,21,32,0.85)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              color: '#fff', fontSize: 20, cursor: 'pointer',
+              backdropFilter: 'blur(8px)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>{sym}</button>
+          ))}
+        </div>
       </div>
 
-      {/* Right side panel — only on map screen */}
-      {isMapScreen && (
-        <TabletSidePanel own={own} wind={wind} vessels={vessels} term={term} night={night} hourly={hourly} />
-      )}
+      {/* Right panel — always visible, content switches per tab */}
+      <TabletRightPanel
+        screen={screen} onTab={onTab}
+        own={own} wind={wind} vessels={vessels}
+        night={night} onNightToggle={onNightToggle}
+        term={term} setTerm={setTerm}
+        mapStyle={mapStyle} setMapStyle={setMapStyle}
+        hourly={hourly}
+        aisLoading={aisLoading} aisError={aisError} aisUpdated={aisUpdated}
+      />
     </div>
   )
 }
