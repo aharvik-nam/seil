@@ -107,21 +107,44 @@ function TabNav({ active, onTab }: { active: Screen; onTab: (s: Screen) => void 
 }
 
 // ─── Map constants ────────────────────────────────────────────
-const KARTVERKET_URL =
-  'https://cache.kartverket.no/v1/wmts/1.0.0/sjokartraster/default/webmercator/{z}/{y}/{x}.png'
+type MapStyle = 'sjokar' | 'graa' | 'topo'
+
+const MAP_TILE_CONFIGS: Record<MapStyle, { label: string; hint: string; url: string; seamark: boolean }> = {
+  sjokar: {
+    label: 'Sjøkart',
+    hint: 'Offisielt norsk sjøkart',
+    url: 'https://cache.kartverket.no/v1/wmts/1.0.0/sjokartraster/default/webmercator/{z}/{y}/{x}.png',
+    seamark: true,
+  },
+  graa: {
+    label: 'Gråtone',
+    hint: 'Nøytralt topokart i gråtoner',
+    url: 'https://cache.kartverket.no/v1/wmts/1.0.0/topograatone/default/webmercator/{z}/{y}/{x}.png',
+    seamark: true,
+  },
+  topo: {
+    label: 'Topo',
+    hint: 'Farget topografisk kart',
+    url: 'https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png',
+    seamark: false,
+  },
+}
 
 const OPENSEAMAP_URL = 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png'
 
-const MAP_STYLE = {
-  version: 8 as const,
-  sources: {
-    kartverket: { type: 'raster' as const, tiles: [KARTVERKET_URL], tileSize: 256, attribution: '© Kartverket' },
-    openseamap: { type: 'raster' as const, tiles: [OPENSEAMAP_URL], tileSize: 256, attribution: '© OpenSeaMap contributors' },
-  },
-  layers: [
-    { id: 'kartverket', type: 'raster' as const, source: 'kartverket' },
-    { id: 'openseamap', type: 'raster' as const, source: 'openseamap', paint: { 'raster-opacity': 0.9 as number } },
-  ],
+function buildMapStyle(mapStyle: MapStyle) {
+  const cfg = MAP_TILE_CONFIGS[mapStyle]
+  return {
+    version: 8 as const,
+    sources: {
+      kartverket: { type: 'raster' as const, tiles: [cfg.url], tileSize: 256, attribution: '© Kartverket' },
+      openseamap: { type: 'raster' as const, tiles: [OPENSEAMAP_URL], tileSize: 256, attribution: '© OpenSeaMap contributors' },
+    },
+    layers: [
+      { id: 'kartverket', type: 'raster' as const, source: 'kartverket' },
+      ...(cfg.seamark ? [{ id: 'openseamap', type: 'raster' as const, source: 'openseamap', paint: { 'raster-opacity': 0.9 as number } }] : []),
+    ],
+  }
 }
 
 // Approximate Oslofjord coords: Solvik brygge → Drøbak
@@ -172,7 +195,8 @@ function AisMarker({ vessel, onClick }: { vessel: AisVessel; onClick?: () => voi
   )
 }
 
-function SeilMap({ route = false, vessels = [], own = OWN_VESSEL_DEFAULT, onVesselSelect }: { route?: boolean; vessels?: AisVessel[]; own?: OwnVessel; onVesselSelect?: (v: AisVessel) => void }): ReactElement {
+function SeilMap({ route = false, vessels = [], own = OWN_VESSEL_DEFAULT, onVesselSelect, mapStyle = 'sjokar' }: { route?: boolean; vessels?: AisVessel[]; own?: OwnVessel; onVesselSelect?: (v: AisVessel) => void; mapStyle?: MapStyle }): ReactElement {
+  const builtStyle = React.useMemo(() => buildMapStyle(mapStyle), [mapStyle])
   const PROJ = 10 // minutes to project ahead
   const vectorData = {
     type: 'FeatureCollection' as const,
@@ -194,7 +218,7 @@ function SeilMap({ route = false, vessels = [], own = OWN_VESSEL_DEFAULT, onVess
     <MapLibre
       initialViewState={{ longitude: OWN_VESSEL.lon, latitude: OWN_VESSEL.lat, zoom: 11 }}
       style={{ width: '100%', height: '100%' }}
-      mapStyle={MAP_STYLE}
+      mapStyle={builtStyle}
       attributionControl={false}
     >
       <Source id="vectors" type="geojson" data={vectorData}>
@@ -474,13 +498,13 @@ function windBeaufort(kn: number): number {
   return scale.findIndex(v => kn <= v) + (kn > 63 ? 12 : 0)
 }
 
-function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind, term = 'enkel' }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void; vessels?: AisVessel[]; own?: OwnVessel; wind?: WindData | null; term?: Term }) {
+function ChartScreen({ night, onTab, onNightToggle, vessels, own, wind, term = 'enkel', mapStyle = 'sjokar' }: { night: boolean; onTab: (s: Screen) => void; onNightToggle: () => void; vessels?: AisVessel[]; own?: OwnVessel; wind?: WindData | null; term?: Term; mapStyle?: MapStyle }) {
   const L = LABELS[term]
   const [selected, setSelected] = useState<AisVessel | null>(null)
   return (
     <div className={'scr' + (night ? ' seil-night' : '')} onClick={() => setSelected(null)}>
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <SeilMap vessels={vessels} own={own} onVesselSelect={v => { setSelected(v); }} />
+        <SeilMap vessels={vessels} own={own} onVesselSelect={v => { setSelected(v); }} mapStyle={mapStyle} />
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 120,
           background: 'linear-gradient(to bottom, var(--scrim), transparent)', zIndex: 10 }} />
         <StatusBar over time={night ? '02:14' : '13:42'} />
@@ -997,7 +1021,7 @@ function AisScreen({ onTab, vessels, loading, error, updated, term = 'enkel' }: 
 }
 
 // ─── Screen 6: Settings ───────────────────────────────────────
-function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm }: { onTab: (s: Screen) => void; night: boolean; onNightToggle: () => void; term?: Term; setTerm?: (t: Term) => void }) {
+function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm, mapStyle = 'sjokar', setMapStyle }: { onTab: (s: Screen) => void; night: boolean; onNightToggle: () => void; term?: Term; setTerm?: (t: Term) => void; mapStyle?: MapStyle; setMapStyle?: (s: MapStyle) => void }) {
   const SRow = ({ icon, label, value, chev, toggle, on, last }: {
     icon:string; label:string; value?:string; chev?:boolean; toggle?:boolean; on?:boolean; last?:boolean
   }) => (
@@ -1093,7 +1117,24 @@ function SettingsScreen({ onTab, night, onNightToggle, term = 'enkel', setTerm }
           </div>
           <div style={{ borderTop:'1px solid var(--hairline)' }} />
           <SRow icon="ruler" label="Enheter" value="kn · nm · m" chev />
-          <SRow icon="layers" label="Sjøkart" value="Norge · NO" chev />
+          <div style={{ borderTop:'1px solid var(--hairline)', padding:'10px 12px 8px' }}>
+            <div className="sectlabel" style={{ fontSize:10, marginBottom:8, marginLeft:2 }}>Sjøkart</div>
+            <div style={{ display:'flex', gap:8 }}>
+              {(Object.entries(MAP_TILE_CONFIGS) as [MapStyle, typeof MAP_TILE_CONFIGS[MapStyle]][]).map(([key, cfg]) => {
+                const on = mapStyle === key
+                return (
+                  <div key={key} onClick={() => setMapStyle?.(key)} style={{
+                    flex:1, height:60, borderRadius:'var(--r-md)', padding:'0 10px', cursor:'pointer',
+                    display:'flex', flexDirection:'column', justifyContent:'center', gap:2,
+                    background: on ? 'var(--accent-soft)' : 'var(--panel-2)',
+                    border: '1.5px solid ' + (on ? 'var(--accent)' : 'transparent') }}>
+                    <span style={{ fontSize:13, fontWeight:700, color: on ? 'var(--accent)' : 'var(--text)', whiteSpace:'nowrap' }}>{cfg.label}</span>
+                    <span style={{ fontSize:10, color:'var(--text-dim)', fontWeight:500, lineHeight:1.3 }}>{cfg.hint}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
           <SRow icon="sun" label="Hold skjerm våken" toggle on last />
         </Group>
         <Group title="Sikkerhet">
@@ -1116,6 +1157,7 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('chart')
   const [night, setNight] = useState(false)
   const [term, setTermState] = useState<Term>(() => (localStorage.getItem('seil.term') as Term) || 'enkel')
+  const [mapStyle, setMapStyleState] = useState<MapStyle>(() => (localStorage.getItem('seil.mapstyle') as MapStyle) || 'sjokar')
   const own = useOwnVessel()
   const { vessels, loading: aisLoading, error: aisError, updated: aisUpdated } = useAis(own)
   const wind = useWind(own)
@@ -1123,6 +1165,7 @@ export default function App() {
   const onTab = (s: Screen) => setScreen(s)
   const onNightToggle = () => setNight(n => !n)
   const setTerm = (t: Term) => { setTermState(t); localStorage.setItem('seil.term', t) }
+  const setMapStyle = (s: MapStyle) => { setMapStyleState(s); localStorage.setItem('seil.mapstyle', s) }
 
   return (
     <div style={{
@@ -1150,12 +1193,12 @@ export default function App() {
         position: 'relative',
         flexShrink: 0,
       }}>
-        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} wind={wind} term={term} />}
+        {screen === 'chart'   && <ChartScreen night={night} onTab={onTab} onNightToggle={onNightToggle} vessels={vessels} own={own} wind={wind} term={term} mapStyle={mapStyle} />}
         {screen === 'instr'   && <InstrumentScreen onTab={onTab} wind={wind} term={term} />}
         {screen === 'route'   && <RouteScreen onTab={onTab} />}
         {screen === 'weather' && <WeatherScreen onTab={onTab} />}
         {screen === 'ais'     && <AisScreen onTab={onTab} vessels={vessels} loading={aisLoading} error={aisError} updated={aisUpdated} term={term} />}
-        {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} term={term} setTerm={setTerm} />}
+        {screen === 'more'    && <SettingsScreen onTab={onTab} night={night} onNightToggle={onNightToggle} term={term} setTerm={setTerm} mapStyle={mapStyle} setMapStyle={setMapStyle} />}
       </div>
     </div>
   )
